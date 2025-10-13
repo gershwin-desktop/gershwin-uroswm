@@ -52,7 +52,7 @@
                                                         withValueList:NULL
                                                       registerWindow:YES];
 
-    [connection registerAsWindowManager:YES screenId:1 selectionWindow:selectionManagerWindow];
+    [connection registerAsWindowManager:YES screenId:0 selectionWindow:selectionManagerWindow];
 
     EWMHService *ewmhService = [EWMHService sharedInstanceWithConnection:connection];
     [ewmhService putPropertiesForRootWindow:[screen rootWindow] andWmWindow:selectionManagerWindow];
