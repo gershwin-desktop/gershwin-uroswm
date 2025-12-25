@@ -1,5 +1,6 @@
 PACKAGE_NAME = uroswm
 
+APP_INSTALL_DIR = $(DESTDIR)/System/Library/CoreServices/Applications
 GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
 include $(GNUSTEP_MAKEFILES)/common.make
 
@@ -7,24 +8,32 @@ VERSION = 0.1.0
 
 DEPENDENCIES = XCBKit
 
-TOOL_NAME = uroswm
-uroswm_APPLICATION_ICON =
-export TOOL_NAME
+APP_NAME = WindowManager
+$(APP_NAME)_APPLICATION_ICON = WindowManager.png
+$(APP_NAME)_RESOURCE_FILES = WindowManager.png
+export APP_NAME
 
-$(TOOL_NAME)_LD_FLAGS += -L./XCBKit/XCBKit.framework/
+$(APP_NAME)_LD_FLAGS += -L./XCBKit/XCBKit.framework/
 
-$(TOOL_NAME)_OBJC_FILES = \
+$(APP_NAME)_OBJC_FILES = \
 		main.m \
-		URSEventHandler.m
+		URSHybridEventHandler.m \
+		UROSWMApplication.m
 
-$(TOOL_NAME)_HEADER_FILES = \
-		URSEventHandler.h
+$(APP_NAME)_HEADER_FILES = \
+		URSHybridEventHandler.h \
+		UROSWMApplication.h
 
-$(TOOL_NAME)_TOOL_LIBS = -lXCBKit -lxcb
+$(APP_NAME)_GUI_LIBS = -lXCBKit -lxcb
 
-ADDITIONAL_OBJCFLAGS = -std=c99 -g -O0 -fobjc-arc -Wall #-Wno-unused -Werror -Wall
+ADDITIONAL_OBJCFLAGS = -std=c99 -g -O0 -fobjc-arc -Wall -Wno-typedef-redefinition #-Wno-unused -Werror -Wall
 
 #LIBRARIES_DEPEND_UPON += $(shell pkg-config --libs xcb) $(FND_LIBS) $(OBJC_LIBS) $(SYSTEM_LIBS)
 
 include $(GNUSTEP_MAKEFILES)/aggregate.make
-include $(GNUSTEP_MAKEFILES)/tool.make
+include $(GNUSTEP_MAKEFILES)/application.make
+
+# Custom target to modify Info-gnustep.plist after it's generated
+after-WindowManager-all::
+	@echo "Modifying Info-gnustep.plist to use custom principal class..."
+	@sed -i.bak 's/NSPrincipalClass = "NSApplication";/NSPrincipalClass = "UROSWMApplication";/' WindowManager.app/Resources/Info-gnustep.plist
