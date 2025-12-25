@@ -432,6 +432,14 @@ static URSThemeIntegration *sharedInstance = nil;
         BOOL isRikTheme = [[theme name] isEqualToString:@"Rik"];
         NSLog(@"Using %@ positioning for buttons", isRikTheme ? @"authentic Rik" : @"automatic GSTheme");
 
+        // COMPARISON: Log what the actual Rik theme positioning methods return
+        if (isRikTheme) {
+            NSRect actualCloseFrame = [theme closeButtonFrameForBounds:drawRect];
+            NSRect actualMiniFrame = [theme miniaturizeButtonFrameForBounds:drawRect];
+            NSLog(@"COMPARISON - Actual Rik closeButtonFrame: %@", NSStringFromRect(actualCloseFrame));
+            NSLog(@"COMPARISON - Actual Rik miniaturizeButtonFrame: %@", NSStringFromRect(actualMiniFrame));
+        }
+
         if (styleMask & NSClosableWindowMask) {
             NSRect closeFrame;
             if (isRikTheme) {
@@ -444,7 +452,9 @@ static URSThemeIntegration *sharedInstance = nil;
                     RIK_TITLEBAR_PADDING_LEFT,
                     drawRect.size.height - RIK_TITLEBAR_BUTTON_SIZE - RIK_TITLEBAR_PADDING_TOP,
                     RIK_TITLEBAR_BUTTON_SIZE, RIK_TITLEBAR_BUTTON_SIZE);
-                NSLog(@"Standalone: Authentic Rik closeFrame: %@", NSStringFromRect(closeFrame));
+                NSLog(@"Standalone: Our Rik closeFrame: %@", NSStringFromRect(closeFrame));
+                NSLog(@"COMPARISON - Using constants: left=%.1f, top=%.1f, size=%.1f",
+                      RIK_TITLEBAR_PADDING_LEFT, RIK_TITLEBAR_PADDING_TOP, (float)RIK_TITLEBAR_BUTTON_SIZE);
             } else {
                 closeFrame = [theme closeButtonFrameForBounds:drawRect];
                 NSLog(@"Standalone: GSTheme closeButtonFrameForBounds returned: %@", NSStringFromRect(closeFrame));
@@ -495,17 +505,33 @@ static URSThemeIntegration *sharedInstance = nil;
             }
 
             if (closeImage) {
-                // Add a circular background to match Rik theme
+                // Add authentic Rik button background - make it exactly image size (12x13)
+                // Center a 12x12 ball within the 15x15 frame to exactly match image width
+                NSRect ballFrame = NSMakeRect(
+                    closeFrame.origin.x + 1.5,
+                    closeFrame.origin.y + 1.5,
+                    12.0, 12.0);
+                NSLog(@"Standalone: Close ballFrame (13x13 centered): %@", NSStringFromRect(ballFrame));
+
                 [[NSColor colorWithCalibratedRed:0.9 green:0.9 blue:0.9 alpha:1.0] set];
-                NSBezierPath *ovalPath = [NSBezierPath bezierPathWithOvalInRect:closeFrame];
+                NSBezierPath *ovalPath = [NSBezierPath bezierPathWithOvalInRect:ballFrame];
                 [ovalPath fill];
 
                 // Add a border
                 [[NSColor darkGrayColor] set];
                 [ovalPath stroke];
 
-                // Try different blend modes to make the image visible
-                [closeImage drawInRect:closeFrame
+                // Draw the 12x13 image centered in the 15x15 frame
+                NSRect imageRect = NSMakeRect(
+                    closeFrame.origin.x + (closeFrame.size.width - closeImage.size.width) / 2,
+                    closeFrame.origin.y + (closeFrame.size.height - closeImage.size.height) / 2,
+                    closeImage.size.width, closeImage.size.height);
+                NSLog(@"Standalone: Close imageRect (centered %gx%g in %gx%g): %@",
+                      closeImage.size.width, closeImage.size.height,
+                      closeFrame.size.width, closeFrame.size.height,
+                      NSStringFromRect(imageRect));
+
+                [closeImage drawInRect:imageRect
                                fromRect:NSZeroRect
                               operation:NSCompositeSourceOver
                                fraction:1.0];
@@ -532,7 +558,12 @@ static URSThemeIntegration *sharedInstance = nil;
                     RIK_TITLEBAR_PADDING_LEFT + RIK_TITLEBAR_BUTTON_SIZE + 4, // 4px padding between buttons
                     drawRect.size.height - RIK_TITLEBAR_BUTTON_SIZE - RIK_TITLEBAR_PADDING_TOP,
                     RIK_TITLEBAR_BUTTON_SIZE, RIK_TITLEBAR_BUTTON_SIZE);
-                NSLog(@"Standalone: Authentic Rik miniFrame: %@", NSStringFromRect(miniFrame));
+                NSLog(@"Standalone: Our Rik miniFrame: %@", NSStringFromRect(miniFrame));
+                NSLog(@"COMPARISON - Mini calc: x=%.1f+%.1f+4=%.1f, y=%.1f-%.1f-%.1f=%.1f",
+                      RIK_TITLEBAR_PADDING_LEFT, (float)RIK_TITLEBAR_BUTTON_SIZE,
+                      RIK_TITLEBAR_PADDING_LEFT + RIK_TITLEBAR_BUTTON_SIZE + 4,
+                      drawRect.size.height, (float)RIK_TITLEBAR_BUTTON_SIZE, RIK_TITLEBAR_PADDING_TOP,
+                      drawRect.size.height - RIK_TITLEBAR_BUTTON_SIZE - RIK_TITLEBAR_PADDING_TOP);
             } else {
                 miniFrame = [theme miniaturizeButtonFrameForBounds:drawRect];
                 NSLog(@"Standalone: GSTheme miniaturizeButtonFrameForBounds returned: %@", NSStringFromRect(miniFrame));
@@ -580,20 +611,36 @@ static URSThemeIntegration *sharedInstance = nil;
             }
 
             if (miniImage) {
-                // Add a circular background to match Rik theme
+                // Add authentic Rik button background - make it exactly image size (12x13)
+                // Center a 12x12 ball within the 15x15 frame to exactly match image width
+                NSRect ballFrame = NSMakeRect(
+                    miniFrame.origin.x + 1.5,
+                    miniFrame.origin.y + 1.5,
+                    12.0, 12.0);
+                NSLog(@"Standalone: Mini ballFrame (13x13 centered): %@", NSStringFromRect(ballFrame));
+
                 [[NSColor colorWithCalibratedRed:0.9 green:0.9 blue:0.9 alpha:1.0] set];
-                NSBezierPath *ovalPath = [NSBezierPath bezierPathWithOvalInRect:miniFrame];
+                NSBezierPath *ovalPath = [NSBezierPath bezierPathWithOvalInRect:ballFrame];
                 [ovalPath fill];
 
                 // Add a border
                 [[NSColor darkGrayColor] set];
                 [ovalPath stroke];
 
-                // Try different blend modes to make the image visible
-                [miniImage drawInRect:miniFrame
+                // Draw the 12x13 image centered in the 15x15 frame
+                NSRect imageRect = NSMakeRect(
+                    miniFrame.origin.x + (miniFrame.size.width - miniImage.size.width) / 2,
+                    miniFrame.origin.y + (miniFrame.size.height - miniImage.size.height) / 2,
+                    miniImage.size.width, miniImage.size.height);
+                NSLog(@"Standalone: Mini imageRect (centered %gx%g in %gx%g): %@",
+                      miniImage.size.width, miniImage.size.height,
+                      miniFrame.size.width, miniFrame.size.height,
+                      NSStringFromRect(imageRect));
+
+                [miniImage drawInRect:imageRect
                               fromRect:NSZeroRect
                              operation:NSCompositeSourceOver
-                              fraction:1.0];
+                             fraction:1.0];
                 NSLog(@"Standalone: Drew miniaturize button image with circular background at frame: %@", NSStringFromRect(miniFrame));
             } else {
                 // Draw a simple minimize line if no image available
@@ -633,16 +680,26 @@ static URSThemeIntegration *sharedInstance = nil;
 
                 NSImage *buttonImage = [zoomButton image];
                 if (buttonImage) {
-                    // Add a light background to make the image visible
+                    // Add authentic Rik button background - make it exactly image size
+                    // Center a 12x12 ball within the 15x15 frame to exactly match image width
+                    NSRect ballFrame = NSMakeRect(
+                        zoomFrame.origin.x + 1.5,
+                        zoomFrame.origin.y + 1.5,
+                        12.0, 12.0);
                     [[NSColor colorWithCalibratedRed:0.9 green:0.9 blue:0.9 alpha:1.0] set];
-                    NSBezierPath *ovalPath = [NSBezierPath bezierPathWithOvalInRect:zoomFrame];
+                    NSBezierPath *ovalPath = [NSBezierPath bezierPathWithOvalInRect:ballFrame];
                     [ovalPath fill];
 
                     // Add a border
                     [[NSColor darkGrayColor] set];
                     [ovalPath stroke];
 
-                    [buttonImage drawInRect:zoomFrame
+                    // Draw the image centered in the 15x15 frame (most zoom images are also 12x13)
+                    NSRect imageRect = NSMakeRect(
+                        zoomFrame.origin.x + (zoomFrame.size.width - buttonImage.size.width) / 2,
+                        zoomFrame.origin.y + (zoomFrame.size.height - buttonImage.size.height) / 2,
+                        buttonImage.size.width, buttonImage.size.height);
+                    [buttonImage drawInRect:imageRect
                                    fromRect:NSZeroRect
                                   operation:NSCompositeSourceOver
                                    fraction:1.0];
