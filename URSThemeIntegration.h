@@ -8,6 +8,7 @@
 #import <Foundation/Foundation.h>
 #import <AppKit/AppKit.h>
 #import <GNUstepGUI/GSTheme.h>
+#import <xcb/xcb.h>
 #import <XCBKit/XCBTitleBar.h>
 #import <XCBKit/XCBFrame.h>
 #import <XCBKit/enums/ETitleBarColor.h>
@@ -48,5 +49,10 @@
 // Configuration
 @property (assign, nonatomic) BOOL enabled;
 @property (strong, nonatomic) NSMutableArray *managedTitlebars;
+
+// Fixed-size window tracking (for hiding buttons except close)
++ (void)registerFixedSizeWindow:(xcb_window_t)windowId;
++ (void)unregisterFixedSizeWindow:(xcb_window_t)windowId;
++ (BOOL)isFixedSizeWindow:(xcb_window_t)windowId;
 
 @end

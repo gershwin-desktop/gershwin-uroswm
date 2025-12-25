@@ -12,6 +12,7 @@
 #import "URSHybridEventHandler.h"
 #import <XCBKit/XCBScreen.h>
 #import <xcb/xcb.h>
+#import <xcb/xcb_icccm.h>
 #import <XCBKit/services/EWMHService.h>
 #import <XCBKit/XCBFrame.h>
 #import "URSThemeIntegration.h"
@@ -300,6 +301,9 @@
 
             // Let XCBConnection handle the map request normally (this creates titlebar structure)
             [connection handleMapRequest:mapRequestEvent];
+
+            // Hide borders for windows with fixed sizes (like info panels and logout)
+            [self adjustBorderForFixedSizeWindow:mapRequestEvent->window];
 
             // Apply GSTheme immediately with no delay
             [self applyGSThemeToRecentlyMappedWindow:[NSNumber numberWithUnsignedInt:mapRequestEvent->window]];
@@ -612,6 +616,53 @@
         }
     } @catch (NSException *exception) {
         NSLog(@"Exception in titlebar expose handler: %@", exception.reason);
+    }
+}
+
+- (void)adjustBorderForFixedSizeWindow:(xcb_window_t)clientWindowId {
+    @try {
+        // Check if window has fixed size (min == max in WM_NORMAL_HINTS)
+        xcb_size_hints_t sizeHints;
+        if (xcb_icccm_get_wm_normal_hints_reply([connection connection],
+                                                 xcb_icccm_get_wm_normal_hints([connection connection], clientWindowId),
+                                                 &sizeHints,
+                                                 NULL)) {
+            if ((sizeHints.flags & XCB_ICCCM_SIZE_HINT_P_MIN_SIZE) &&
+                (sizeHints.flags & XCB_ICCCM_SIZE_HINT_P_MAX_SIZE) &&
+                sizeHints.min_width == sizeHints.max_width &&
+                sizeHints.min_height == sizeHints.max_height) {
+
+                NSLog(@"Fixed-size window %u detected - removing border and extra buttons", clientWindowId);
+
+                // Register as fixed-size window (for button hiding in GSTheme rendering)
+                [URSThemeIntegration registerFixedSizeWindow:clientWindowId];
+
+                // Find the frame for this client window and set its border to 0
+                NSDictionary *windowsMap = [connection windowsMap];
+                for (NSString *mapWindowId in windowsMap) {
+                    XCBWindow *window = [windowsMap objectForKey:mapWindowId];
+
+                    if (window && [window isKindOfClass:[XCBFrame class]]) {
+                        XCBFrame *frame = (XCBFrame*)window;
+                        XCBWindow *clientWindow = [frame childWindowForKey:ClientWindow];
+
+                        if (clientWindow && [clientWindow window] == clientWindowId) {
+                            // Set the frame's border width to 0
+                            uint32_t borderWidth[] = {0};
+                            xcb_configure_window([connection connection],
+                                                 [frame window],
+                                                 XCB_CONFIG_WINDOW_BORDER_WIDTH,
+                                                 borderWidth);
+                            [connection flush];
+                            NSLog(@"Removed border from frame %u for fixed-size window %u", [frame window], clientWindowId);
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    } @catch (NSException *exception) {
+        NSLog(@"Exception in adjustBorderForFixedSizeWindow: %@", exception.reason);
     }
 }
 

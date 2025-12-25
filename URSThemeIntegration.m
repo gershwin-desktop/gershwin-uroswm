@@ -16,6 +16,35 @@
 @implementation URSThemeIntegration
 
 static URSThemeIntegration *sharedInstance = nil;
+static NSMutableSet *fixedSizeWindows = nil;
+
+#pragma mark - Fixed-size window tracking
+
++ (void)initialize {
+    if (self == [URSThemeIntegration class]) {
+        fixedSizeWindows = [[NSMutableSet alloc] init];
+    }
+}
+
++ (void)registerFixedSizeWindow:(xcb_window_t)windowId {
+    @synchronized(fixedSizeWindows) {
+        [fixedSizeWindows addObject:@(windowId)];
+        NSLog(@"Registered fixed-size window %u (total: %lu)", windowId, (unsigned long)[fixedSizeWindows count]);
+    }
+}
+
++ (void)unregisterFixedSizeWindow:(xcb_window_t)windowId {
+    @synchronized(fixedSizeWindows) {
+        [fixedSizeWindows removeObject:@(windowId)];
+        NSLog(@"Unregistered fixed-size window %u", windowId);
+    }
+}
+
++ (BOOL)isFixedSizeWindow:(xcb_window_t)windowId {
+    @synchronized(fixedSizeWindows) {
+        return [fixedSizeWindows containsObject:@(windowId)];
+    }
+}
 
 // Method to draw authentic Rik button balls using the exact gradient logic from RikWindowButtonCell
 + (void)drawRikButtonBall:(NSRect)frame withColor:(NSColor*)baseColor {
@@ -582,9 +611,23 @@ static URSThemeIntegration *sharedInstance = nil;
         [[NSColor lightGrayColor] set];
         NSRectFill(NSMakeRect(0, 0, titlebarSize.width, titlebarSize.height));
 
-        // Use GSTheme to draw titlebar decoration with all button types
+        // Use GSTheme to draw titlebar decoration
         NSRect drawRect = NSMakeRect(0, 0, titlebarSize.width, titlebarSize.height);
-        NSUInteger styleMask = NSTitledWindowMask | NSClosableWindowMask | NSMiniaturizableWindowMask | NSResizableWindowMask;
+
+        // Check if this is a fixed-size window (only show close button)
+        XCBWindow *clientWindow = [frame childWindowForKey:ClientWindow];
+        xcb_window_t clientWindowId = clientWindow ? [clientWindow window] : 0;
+        BOOL isFixedSize = clientWindowId && [URSThemeIntegration isFixedSizeWindow:clientWindowId];
+
+        NSUInteger styleMask;
+        if (isFixedSize) {
+            // Fixed-size windows only get close button
+            styleMask = NSTitledWindowMask | NSClosableWindowMask;
+            NSLog(@"Using fixed-size styleMask (close button only) for window %u", clientWindowId);
+        } else {
+            // Normal windows get all buttons
+            styleMask = NSTitledWindowMask | NSClosableWindowMask | NSMiniaturizableWindowMask | NSResizableWindowMask;
+        }
         GSThemeControlState state = isActive ? GSThemeNormalState : GSThemeSelectedState;
 
         NSLog(@"Drawing standalone GSTheme titlebar with styleMask: 0x%lx, state: %d", (unsigned long)styleMask, (int)state);
