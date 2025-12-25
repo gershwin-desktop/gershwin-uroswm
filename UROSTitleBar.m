@@ -279,46 +279,47 @@
 - (void)handleCloseButton {
     NSLog(@"UROSTitleBar: Close button pressed");
 
-    // Find the client window to close
-    [self findClientWindowAndExecute:^(xcb_window_t clientWindow) {
-        // Send WM_DELETE_WINDOW message to client
-        xcb_intern_atom_cookie_t cookie = xcb_intern_atom([self.connection connection], 0, 16, "WM_DELETE_WINDOW");
-        xcb_intern_atom_reply_t *reply = xcb_intern_atom_reply([self.connection connection], cookie, NULL);
-
-        if (reply) {
-            xcb_client_message_event_t event;
-            memset(&event, 0, sizeof(event));
-            event.response_type = XCB_CLIENT_MESSAGE;
-            event.window = clientWindow;
-            event.format = 32;
-            event.type = reply->atom;
-            event.data.data32[0] = reply->atom;
-            event.data.data32[1] = XCB_CURRENT_TIME;
-
-            xcb_send_event([self.connection connection], 0, clientWindow,
-                          XCB_EVENT_MASK_NO_EVENT, (const char*)&event);
+    XCBFrame *frame = [self findAssociatedFrame];
+    if (frame) {
+        XCBWindow *clientWindow = [frame childWindowForKey:ClientWindow];
+        if (clientWindow) {
+            NSLog(@"UROSTitleBar: Closing client window via xcbkit");
+            [clientWindow close];
             [self.connection flush];
-
-            free(reply);
         }
-    }];
+    }
 }
 
 - (void)handleMinimizeButton {
     NSLog(@"UROSTitleBar: Minimize button pressed");
 
-    [self findClientWindowAndExecute:^(xcb_window_t clientWindow) {
-        // Unmap the window to minimize it
-        xcb_unmap_window([self.connection connection], clientWindow);
+    XCBFrame *frame = [self findAssociatedFrame];
+    if (frame) {
+        NSLog(@"UROSTitleBar: Minimizing frame via xcbkit");
+        [frame minimize];
         [self.connection flush];
-    }];
+    }
 }
 
 - (void)handleMaximizeButton {
-    NSLog(@"UROSTitleBar: Maximize button pressed");
+    NSLog(@"UROSTitleBar: Maximize/Zoom button pressed");
 
-    // TODO: Implement maximize/restore toggle
-    NSLog(@"UROSTitleBar: Maximize functionality not yet implemented");
+    XCBFrame *frame = [self findAssociatedFrame];
+    if (frame) {
+        if ([frame isMaximized]) {
+            // Restore (unzoom) the window
+            NSLog(@"UROSTitleBar: Restoring window from maximized state via xcbkit");
+            [frame restoreDimensionAndPosition];
+        } else {
+            // Maximize (zoom) the window to screen size
+            NSLog(@"UROSTitleBar: Maximizing window via xcbkit");
+            XCBScreen *screen = [[self.connection screens] objectAtIndex:0];
+            XCBSize maxSize = XCBMakeSize([screen width], [screen height]);
+            XCBPoint maxPosition = XCBMakePoint(0, 0);
+            [frame maximizeToSize:maxSize andPosition:maxPosition];
+        }
+        [self.connection flush];
+    }
 }
 
 - (void)beginWindowDrag:(xcb_button_press_event_t*)event {
@@ -326,8 +327,8 @@
     // TODO: Implement window dragging
 }
 
-- (void)findClientWindowAndExecute:(void(^)(xcb_window_t))block {
-    // Search through connection's windows to find the client window associated with this titlebar
+- (XCBFrame*)findAssociatedFrame {
+    // Search through connection's windows to find the frame associated with this titlebar
     NSDictionary *windowsMap = [self.connection windowsMap];
 
     for (NSString *windowIdString in windowsMap) {
@@ -338,15 +339,11 @@
             XCBWindow *titlebarWindow = [frame childWindowForKey:TitleBar];
 
             if (titlebarWindow && [titlebarWindow window] == self.windowId) {
-                // Found our frame, get the client window
-                XCBWindow *clientWindow = [frame childWindowForKey:ClientWindow];
-                if (clientWindow) {
-                    block([clientWindow window]);
-                    return;
-                }
+                return frame;
             }
         }
     }
+    return nil;
 }
 
 - (void)handleMotion:(xcb_motion_notify_event_t*)event {

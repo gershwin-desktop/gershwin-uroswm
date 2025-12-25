@@ -11,6 +11,14 @@
 #import <GNUstepGUI/GSTheme.h>
 #import <XCBKit/XCBTitleBar.h>
 
+// Button types for hit detection
+typedef NS_ENUM(NSInteger, GSThemeTitleBarButton) {
+    GSThemeTitleBarButtonNone = 0,
+    GSThemeTitleBarButtonMiniaturize,
+    GSThemeTitleBarButtonClose,
+    GSThemeTitleBarButtonZoom
+};
+
 @interface GSThemeTitleBar : XCBTitleBar
 
 // Override XCBTitleBar drawing methods to use GSTheme
@@ -28,5 +36,8 @@
 - (GSTheme*)currentTheme;
 - (NSUInteger)windowStyleMask;
 - (GSThemeControlState)themeStateForActive:(BOOL)isActive;
+
+// Button hit detection - returns which button was clicked at the given coordinates
+- (GSThemeTitleBarButton)buttonAtPoint:(NSPoint)point;
 
 @end

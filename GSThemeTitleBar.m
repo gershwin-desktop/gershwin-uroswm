@@ -253,4 +253,34 @@
     return isActive ? GSThemeNormalState : GSThemeSelectedState;
 }
 
+#pragma mark - Button Hit Detection
+
+- (GSThemeTitleBarButton)buttonAtPoint:(NSPoint)point {
+    // Button layout constants (must match createGSThemeImage:)
+    float buttonSize = 13.0;
+    float buttonSpacing = 17.0;
+    float topMargin = 6.0;
+    float leftMargin = 2.0;
+
+    NSUInteger styleMask = [self windowStyleMask];
+
+    // Define button rects (order: miniaturize, close, zoom)
+    NSRect miniaturizeRect = NSMakeRect(leftMargin, topMargin, buttonSize, buttonSize);
+    NSRect closeRect = NSMakeRect(leftMargin + buttonSpacing, topMargin, buttonSize, buttonSize);
+    NSRect zoomRect = NSMakeRect(leftMargin + (2 * buttonSpacing), topMargin, buttonSize, buttonSize);
+
+    // Check which button was clicked (if any)
+    if ((styleMask & NSMiniaturizableWindowMask) && NSPointInRect(point, miniaturizeRect)) {
+        return GSThemeTitleBarButtonMiniaturize;
+    }
+    if ((styleMask & NSClosableWindowMask) && NSPointInRect(point, closeRect)) {
+        return GSThemeTitleBarButtonClose;
+    }
+    if ((styleMask & NSResizableWindowMask) && NSPointInRect(point, zoomRect)) {
+        return GSThemeTitleBarButtonZoom;
+    }
+
+    return GSThemeTitleBarButtonNone;
+}
+
 @end

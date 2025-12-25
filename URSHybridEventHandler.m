@@ -15,6 +15,7 @@
 #import <XCBKit/services/EWMHService.h>
 #import <XCBKit/XCBFrame.h>
 #import "URSThemeIntegration.h"
+#import "GSThemeTitleBar.h"
 
 @implementation URSHybridEventHandler
 
@@ -261,7 +262,11 @@
         }
         case XCB_BUTTON_PRESS: {
             xcb_button_press_event_t *pressEvent = (xcb_button_press_event_t *)event;
-            [connection handleButtonPress:pressEvent];
+            // Check if this is a button click on a GSThemeTitleBar
+            if (![self handleTitlebarButtonPress:pressEvent]) {
+                // Not a titlebar button, let xcbkit handle normally
+                [connection handleButtonPress:pressEvent];
+            }
             break;
         }
         case XCB_BUTTON_RELEASE: {
@@ -668,6 +673,136 @@
 
     } @catch (NSException *exception) {
         NSLog(@"Exception in periodic window check: %@", exception.reason);
+    }
+}
+
+#pragma mark - Titlebar Button Handling
+
+// Button hit detection for GSTheme-styled titlebars
+- (GSThemeTitleBarButton)buttonAtPoint:(NSPoint)point forTitlebar:(XCBTitleBar*)titlebar {
+    // Button layout based on actual visual positions from pixel sampling:
+    // Close (red) at x=18, Mini (yellow) at x=37, Zoom (green) at x=56
+    // Buttons are 13px wide with ~19px spacing between centers
+    // Order is: Close, Miniaturize, Zoom (left to right)
+    float buttonSize = 13.0;
+    float buttonSpacing = 19.0;  // Actual spacing between button centers
+    float topMargin = 4.0;       // Adjusted for better vertical hit detection
+    float buttonHeight = 16.0;   // Slightly larger hit area vertically
+    float leftMargin = 12.0;     // Close button starts around x=12
+
+    // Define button rects (order: close, miniaturize, zoom - matching visual order)
+    NSRect closeRect = NSMakeRect(leftMargin, topMargin, buttonSize, buttonHeight);
+    NSRect miniaturizeRect = NSMakeRect(leftMargin + buttonSpacing, topMargin, buttonSize, buttonHeight);
+    NSRect zoomRect = NSMakeRect(leftMargin + (2 * buttonSpacing), topMargin, buttonSize, buttonHeight);
+
+    NSLog(@"GSTheme: Button hit test at point (%.0f, %.0f)", point.x, point.y);
+    NSLog(@"GSTheme: Close rect: (%.0f, %.0f, %.0f, %.0f)", closeRect.origin.x, closeRect.origin.y, closeRect.size.width, closeRect.size.height);
+    NSLog(@"GSTheme: Miniaturize rect: (%.0f, %.0f, %.0f, %.0f)", miniaturizeRect.origin.x, miniaturizeRect.origin.y, miniaturizeRect.size.width, miniaturizeRect.size.height);
+    NSLog(@"GSTheme: Zoom rect: (%.0f, %.0f, %.0f, %.0f)", zoomRect.origin.x, zoomRect.origin.y, zoomRect.size.width, zoomRect.size.height);
+
+    // Check which button was clicked (if any)
+    if (NSPointInRect(point, closeRect)) {
+        NSLog(@"GSTheme: Hit close button");
+        return GSThemeTitleBarButtonClose;
+    }
+    if (NSPointInRect(point, miniaturizeRect)) {
+        NSLog(@"GSTheme: Hit miniaturize button");
+        return GSThemeTitleBarButtonMiniaturize;
+    }
+    if (NSPointInRect(point, zoomRect)) {
+        NSLog(@"GSTheme: Hit zoom button");
+        return GSThemeTitleBarButtonZoom;
+    }
+
+    NSLog(@"GSTheme: No button hit");
+    return GSThemeTitleBarButtonNone;
+}
+
+- (BOOL)handleTitlebarButtonPress:(xcb_button_press_event_t*)pressEvent {
+    @try {
+        // Find the window that was clicked
+        XCBWindow *window = [connection windowForXCBId:pressEvent->event];
+        if (!window) {
+            return NO;
+        }
+
+        // Check if it's an XCBTitleBar (GSTheme renders to XCBTitleBar, not a separate class)
+        if (![window isKindOfClass:[XCBTitleBar class]]) {
+            return NO;
+        }
+
+        XCBTitleBar *titlebar = (XCBTitleBar*)window;
+
+        // Check which button was clicked using the button layout
+        NSPoint clickPoint = NSMakePoint(pressEvent->event_x, pressEvent->event_y);
+        GSThemeTitleBarButton button = [self buttonAtPoint:clickPoint forTitlebar:titlebar];
+
+        if (button == GSThemeTitleBarButtonNone) {
+            return NO; // Click wasn't on a button
+        }
+
+        // Find the frame that contains this titlebar
+        XCBFrame *frame = (XCBFrame*)[titlebar parentWindow];
+        if (!frame || ![frame isKindOfClass:[XCBFrame class]]) {
+            NSLog(@"GSTheme: Could not find frame for titlebar button action");
+            return NO;
+        }
+
+        XCBWindow *clientWindow = [frame childWindowForKey:ClientWindow];
+
+        // Handle the button action using xcbkit methods
+        switch (button) {
+            case GSThemeTitleBarButtonClose:
+                NSLog(@"GSTheme: Close button clicked");
+                if (clientWindow) {
+                    [clientWindow close];
+                    [frame setNeedDestroy:YES];
+                }
+                break;
+
+            case GSThemeTitleBarButtonMiniaturize:
+                NSLog(@"GSTheme: Minimize button clicked");
+                [frame minimize];
+                break;
+
+            case GSThemeTitleBarButtonZoom:
+                NSLog(@"GSTheme: Zoom button clicked");
+                if ([frame isMaximized]) {
+                    // Restore from maximized
+                    NSLog(@"GSTheme: Restoring window from maximized state");
+                    [frame restoreDimensionAndPosition];
+                } else {
+                    // Maximize to screen size
+                    NSLog(@"GSTheme: Maximizing window");
+                    XCBScreen *screen = [frame onScreen];
+                    XCBSize size = XCBMakeSize([screen width], [screen height]);
+                    XCBPoint position = XCBMakePoint(0.0, 0.0);
+                    [frame maximizeToSize:size andPosition:position];
+
+                    // Also resize titlebar and client window
+                    uint16_t titleHgt = [titlebar windowRect].size.height;
+                    XCBSize titleSize = XCBMakeSize([screen width], titleHgt);
+                    [titlebar maximizeToSize:titleSize andPosition:XCBMakePoint(0.0, 0.0)];
+                    [titlebar drawTitleBarComponents];
+
+                    if (clientWindow) {
+                        XCBSize clientSize = XCBMakeSize([screen width], [screen height] - titleHgt);
+                        XCBPoint clientPos = XCBMakePoint(0.0, titleHgt - 1);
+                        [clientWindow maximizeToSize:clientSize andPosition:clientPos];
+                    }
+                }
+                break;
+
+            default:
+                return NO;
+        }
+
+        [connection flush];
+        return YES; // We handled the button press
+
+    } @catch (NSException *exception) {
+        NSLog(@"Exception handling titlebar button press: %@", exception.reason);
+        return NO;
     }
 }
 
