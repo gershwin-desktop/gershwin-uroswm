@@ -225,9 +225,37 @@ static NSMutableSet *fixedSizeWindows = nil;
     }
 
     @try {
-        // Get titlebar dimensions
+        // Get titlebar dimensions - use parent frame width to ensure titlebar spans full window
         XCBRect xcbRect = titlebar.windowRect;
-        NSSize titlebarSize = NSMakeSize(xcbRect.size.width, xcbRect.size.height);
+        XCBWindow *parentFrame = [titlebar parentWindow];
+        uint16_t titlebarWidth = xcbRect.size.width;
+
+        if (parentFrame) {
+            XCBRect frameRect = [parentFrame windowRect];
+            titlebarWidth = frameRect.size.width;
+
+            // Resize the X11 titlebar window if it doesn't match the frame width
+            if (xcbRect.size.width != frameRect.size.width) {
+                NSLog(@"Resizing titlebar X11 window from %d to %d to match frame",
+                      xcbRect.size.width, frameRect.size.width);
+
+                uint32_t values[] = {frameRect.size.width};
+                xcb_configure_window([[titlebar connection] connection],
+                                     [titlebar window],
+                                     XCB_CONFIG_WINDOW_WIDTH,
+                                     values);
+
+                // Update the titlebar's internal rect
+                xcbRect.size.width = frameRect.size.width;
+                [titlebar setWindowRect:xcbRect];
+
+                // Recreate the pixmap with the new size
+                [titlebar createPixmap];
+
+                [[titlebar connection] flush];
+            }
+        }
+        NSSize titlebarSize = NSMakeSize(titlebarWidth, xcbRect.size.height);
 
         // Create NSImage for GSTheme to render into
         NSImage *titlebarImage = [[NSImage alloc] initWithSize:titlebarSize];
@@ -594,12 +622,47 @@ static NSMutableSet *fixedSizeWindows = nil;
         }
         XCBTitleBar *titlebar = (XCBTitleBar*)titlebarWindow;
 
-        // Get titlebar dimensions
+        // Get titlebar dimensions - use frame width to ensure titlebar spans full window
         XCBRect titlebarRect = [titlebar windowRect];
-        NSSize titlebarSize = NSMakeSize(titlebarRect.size.width, titlebarRect.size.height);
+        XCBRect frameRect = [frame windowRect];
 
-        NSLog(@"Rendering standalone GSTheme titlebar: %dx%d for window %u",
-              (int)titlebarSize.width, (int)titlebarSize.height, [window window]);
+        // DEBUG: Add 2 pixels to width and shift 1 pixel left to cover both edges
+        uint16_t targetWidth = frameRect.size.width + 2;
+        int16_t targetX = -1;  // Shift titlebar 1 pixel left
+        NSLog(@"DEBUG: Resizing titlebar X11 window to %d at x=%d (frame=%d, current titlebar=%d)",
+              targetWidth, targetX, frameRect.size.width, titlebarRect.size.width);
+
+        uint32_t values[2] = {(uint32_t)targetX, targetWidth};
+        xcb_configure_window([[frame connection] connection],
+                             [titlebar window],
+                             XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_WIDTH,
+                             values);
+
+        // Update the titlebar's internal rect
+        titlebarRect.size.width = targetWidth;
+        [titlebar setWindowRect:titlebarRect];
+
+        // Recreate the pixmap with the new size
+        [titlebar createPixmap];
+
+        [[frame connection] flush];
+
+        // Use frame width to ensure titlebar matches window width exactly
+        // DEBUG: Add 2 pixels (1 on each side) to cover both edges
+        NSSize titlebarSize = NSMakeSize(frameRect.size.width + 2, titlebarRect.size.height);
+        NSLog(@"DEBUG: Using titlebarSize.width = %d (frame was %d)", (int)titlebarSize.width, (int)frameRect.size.width);
+
+        // DEBUG: Also get client window dimensions for comparison
+        XCBWindow *clientWin = [frame childWindowForKey:ClientWindow];
+        XCBRect clientRect = clientWin ? [clientWin windowRect] : XCBMakeRect(XCBMakePoint(0,0), XCBMakeSize(0,0));
+        NSLog(@"DEBUG DIMENSIONS: frame=%dx%d, titlebar=%dx%d, client=%dx%d",
+              (int)frameRect.size.width, (int)frameRect.size.height,
+              (int)titlebarRect.size.width, (int)titlebarRect.size.height,
+              (int)clientRect.size.width, (int)clientRect.size.height);
+
+        NSLog(@"Rendering standalone GSTheme titlebar: %dx%d (frame: %dx%d) for window %u",
+              (int)titlebarSize.width, (int)titlebarSize.height,
+              (int)frameRect.size.width, (int)frameRect.size.height, [window window]);
 
         // Create NSImage for GSTheme to render into
         NSImage *titlebarImage = [[NSImage alloc] initWithSize:titlebarSize];
@@ -610,6 +673,11 @@ static NSMutableSet *fixedSizeWindows = nil;
         // Using transparent would leave garbage pixels from uninitialized pixmap
         [[NSColor lightGrayColor] set];
         NSRectFill(NSMakeRect(0, 0, titlebarSize.width, titlebarSize.height));
+
+        // DEBUG: Draw bright red line at right edge to see exactly where titlebar ends
+        [[NSColor redColor] set];
+        NSRectFill(NSMakeRect(titlebarSize.width - 3, 0, 3, titlebarSize.height));
+        NSLog(@"DEBUG: Drew red marker at x=%d (titlebar width=%d)", (int)(titlebarSize.width - 3), (int)titlebarSize.width);
 
         // Use GSTheme to draw titlebar decoration
         NSRect drawRect = NSMakeRect(0, 0, titlebarSize.width, titlebarSize.height);
