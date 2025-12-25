@@ -560,12 +560,79 @@ static URSThemeIntegration *sharedInstance = nil;
         }
         NSLog(@"Expected Rik values: paddingLeft=2, paddingRight=2, paddingTop=6, buttonSize=13");
 
-        // Draw the window titlebar using GSTheme
+        // Get theme font settings for titlebar text
+        NSString *themeFontName = @"LuxiSans"; // Default from Rik theme
+        float themeFontSize = 13.0;            // Default from Rik theme
+
+        // Try to get font settings from theme bundle
+        NSBundle *themeBundle = [theme bundle];
+        if (themeBundle) {
+            NSDictionary *themeInfo = [themeBundle infoDictionary];
+            if (themeInfo) {
+                NSString *fontName = [themeInfo objectForKey:@"NSFont"];
+                NSString *fontSize = [themeInfo objectForKey:@"NSFontSize"];
+
+                if (fontName) {
+                    themeFontName = fontName;
+                    NSLog(@"Theme font name: %@", themeFontName);
+                }
+                if (fontSize) {
+                    themeFontSize = [fontSize floatValue];
+                    NSLog(@"Theme font size: %.1f", themeFontSize);
+                }
+            }
+        }
+
+        // Set the font for titlebar text rendering
+        NSFont *titlebarFont = [NSFont fontWithName:themeFontName size:themeFontSize];
+        if (!titlebarFont) {
+            // Fallback if LuxiSans is not available
+            titlebarFont = [NSFont systemFontOfSize:themeFontSize];
+            NSLog(@"Using system font fallback at size %.1f (LuxiSans not available)", themeFontSize);
+        } else {
+            NSLog(@"Using theme font: %@ %.1f", themeFontName, themeFontSize);
+        }
+
+        // Draw the window titlebar using GSTheme (but without title text first)
         [theme drawWindowBorder:drawRect
                       withFrame:drawRect
                    forStyleMask:styleMask
                           state:state
-                       andTitle:title ?: @""];
+                       andTitle:@""];  // Empty title, we'll draw it manually
+
+        // Manually draw the title text with the correct theme font
+        if (title && [title length] > 0) {
+            // Calculate available space for title (between buttons and right edge)
+            float leftButtonsWidth = 0;
+            if (styleMask & NSClosableWindowMask) leftButtonsWidth += 19; // Close button + spacing
+            if (styleMask & NSMiniaturizableWindowMask) leftButtonsWidth += 19; // Mini button + spacing
+            if (styleMask & NSResizableWindowMask) leftButtonsWidth += 19; // Zoom button + spacing
+
+            float leftMargin = leftButtonsWidth + 8; // Start after buttons with padding
+            float rightMargin = 8; // Leave margin on right
+            float availableWidth = drawRect.size.width - leftMargin - rightMargin;
+
+            // Calculate text size to center it properly
+            NSSize textSize = [title sizeWithAttributes:@{NSFontAttributeName: titlebarFont}];
+
+            // Center the text in the available space
+            float titleX = leftMargin + (availableWidth - textSize.width) / 2;
+            float titleY = (drawRect.size.height - textSize.height) / 2; // Center vertically
+
+            NSRect titleRect = NSMakeRect(titleX, titleY, textSize.width, textSize.height);
+
+            // Set title text attributes with theme font
+            NSDictionary *titleAttributes = @{
+                NSFontAttributeName: titlebarFont,
+                NSForegroundColorAttributeName: [NSColor blackColor]
+            };
+
+            NSLog(@"Centering title '%@' at rect %@ (available width: %.1f, text width: %.1f)",
+                  title, NSStringFromRect(titleRect), availableWidth, textSize.width);
+
+            // Draw the title text
+            [title drawInRect:titleRect withAttributes:titleAttributes];
+        }
 
         // Add properly positioned and styled buttons using direct theme image loading
         // Use manual Rik positioning since GSTheme methods return generic values
