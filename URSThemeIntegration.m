@@ -456,10 +456,52 @@ static URSThemeIntegration *sharedInstance = nil;
 
     NSLog(@"GSTheme image painted and surface flushed");
 
-    // Cleanup
+    // Cleanup first surface
     cairo_surface_destroy(imageSurface);
     cairo_destroy(ctx);
     cairo_surface_destroy(x11Surface);
+
+    // ALSO paint to dPixmap (inactive pixmap) so unfocused windows don't show black
+    // XCBWindow.drawArea uses isAbove ? pixmap : dPixmap, so both need content
+    xcb_pixmap_t dPixmap = [titlebar dPixmap];
+    if (dPixmap != 0) {
+        NSLog(@"Also painting GSTheme to dPixmap (inactive pixmap): %u", dPixmap);
+
+        cairo_surface_t *dSurface = cairo_xcb_surface_create(
+            [titlebar.connection connection],
+            dPixmap,
+            titlebar.visual.visualType,
+            (int)image.size.width,
+            (int)image.size.height
+        );
+
+        if (cairo_surface_status(dSurface) == CAIRO_STATUS_SUCCESS) {
+            cairo_t *dCtx = cairo_create(dSurface);
+
+            // Recreate image surface (we need to redo RGBA->BGRA conversion)
+            // Note: bitmapPixels was already converted above, so we can reuse it
+            cairo_surface_t *dImageSurface = cairo_image_surface_create_for_data(
+                bitmapPixels,
+                CAIRO_FORMAT_ARGB32,
+                width,
+                height,
+                bytesPerRow
+            );
+
+            if (cairo_surface_status(dImageSurface) == CAIRO_STATUS_SUCCESS) {
+                cairo_set_operator(dCtx, CAIRO_OPERATOR_SOURCE);
+                cairo_set_source_surface(dCtx, dImageSurface, 0, 0);
+                cairo_paint(dCtx);
+                cairo_surface_flush(dSurface);
+                NSLog(@"GSTheme also painted to dPixmap successfully");
+            }
+
+            cairo_surface_destroy(dImageSurface);
+            cairo_destroy(dCtx);
+        }
+        cairo_surface_destroy(dSurface);
+    }
+
     [titlebar.connection flush];
 
     return YES;

@@ -257,12 +257,18 @@
         }
         case XCB_FOCUS_IN: {
             xcb_focus_in_event_t *focusInEvent = (xcb_focus_in_event_t *)event;
+            NSLog(@"XCB_FOCUS_IN received for window %u", focusInEvent->event);
             [connection handleFocusIn:focusInEvent];
+            // Re-render titlebar with GSTheme as active
+            [self handleFocusChange:focusInEvent->event isActive:YES];
             break;
         }
         case XCB_FOCUS_OUT: {
             xcb_focus_out_event_t *focusOutEvent = (xcb_focus_out_event_t *)event;
+            NSLog(@"XCB_FOCUS_OUT received for window %u", focusOutEvent->event);
             [connection handleFocusOut:focusOutEvent];
+            // Re-render titlebar with GSTheme as inactive
+            [self handleFocusChange:focusOutEvent->event isActive:NO];
             break;
         }
         case XCB_BUTTON_PRESS: {
@@ -377,6 +383,79 @@
     if (!success) {
         NSLog(@"GSTheme rendering failed for titlebar, falling back to Cairo");
         // XCBTitleBar will fall back to its default Cairo rendering
+    }
+}
+
+- (void)handleFocusChange:(xcb_window_t)windowId isActive:(BOOL)isActive {
+    @try {
+        NSLog(@"handleFocusChange: window %u, isActive: %d", windowId, isActive);
+
+        // Find the window that received focus change
+        XCBWindow *window = [connection windowForXCBId:windowId];
+        if (!window) {
+            NSLog(@"handleFocusChange: window %u not found in windowsMap, searching for frame containing it", windowId);
+            // The focus event might be for a client window - search all frames
+            NSDictionary *windowsMap = [connection windowsMap];
+            for (NSString *mapWindowId in windowsMap) {
+                XCBWindow *mapWindow = [windowsMap objectForKey:mapWindowId];
+                if (mapWindow && [mapWindow isKindOfClass:[XCBFrame class]]) {
+                    XCBFrame *testFrame = (XCBFrame*)mapWindow;
+                    XCBWindow *clientWindow = [testFrame childWindowForKey:ClientWindow];
+                    if (clientWindow && [clientWindow window] == windowId) {
+                        NSLog(@"handleFocusChange: Found frame containing client window %u", windowId);
+                        window = testFrame;
+                        break;
+                    }
+                }
+            }
+            if (!window) {
+                NSLog(@"handleFocusChange: Could not find any frame for window %u", windowId);
+                return;
+            }
+        }
+
+        NSLog(@"handleFocusChange: Found window of type %@", NSStringFromClass([window class]));
+
+        // Find the frame and titlebar
+        XCBFrame *frame = nil;
+        XCBTitleBar *titlebar = nil;
+
+        if ([window isKindOfClass:[XCBFrame class]]) {
+            frame = (XCBFrame*)window;
+        } else if ([window isKindOfClass:[XCBTitleBar class]]) {
+            titlebar = (XCBTitleBar*)window;
+            frame = (XCBFrame*)[titlebar parentWindow];
+        } else if ([window parentWindow] && [[window parentWindow] isKindOfClass:[XCBFrame class]]) {
+            frame = (XCBFrame*)[window parentWindow];
+        }
+
+        if (frame) {
+            XCBWindow *titlebarWindow = [frame childWindowForKey:TitleBar];
+            if (titlebarWindow && [titlebarWindow isKindOfClass:[XCBTitleBar class]]) {
+                titlebar = (XCBTitleBar*)titlebarWindow;
+            }
+        }
+
+        if (!titlebar) {
+            NSLog(@"handleFocusChange: No titlebar found for window %u", windowId);
+            return;
+        }
+
+        NSLog(@"GSTheme: Focus %@ for window %@", isActive ? @"gained" : @"lost", titlebar.windowTitle);
+
+        // Re-render titlebar with GSTheme using the correct active/inactive state
+        [URSThemeIntegration renderGSThemeToWindow:frame
+                                             frame:frame
+                                             title:[titlebar windowTitle]
+                                            active:isActive];
+
+        // Update background pixmap and redraw
+        [titlebar putWindowBackgroundWithPixmap:[titlebar pixmap]];
+        [titlebar drawArea:[titlebar windowRect]];
+        [connection flush];
+
+    } @catch (NSException *exception) {
+        NSLog(@"Exception in handleFocusChange: %@", exception.reason);
     }
 }
 
@@ -1026,6 +1105,38 @@
     } @catch (NSException *exception) {
         NSLog(@"Exception handling titlebar button press: %@", exception.reason);
         return NO;
+    }
+}
+
+#pragma mark - Focus Change Rendering
+
+- (void)rerenderTitlebarForFrame:(XCBFrame*)frame active:(BOOL)isActive {
+    if (!frame) {
+        return;
+    }
+
+    @try {
+        XCBWindow *titlebarWindow = [frame childWindowForKey:TitleBar];
+        if (!titlebarWindow || ![titlebarWindow isKindOfClass:[XCBTitleBar class]]) {
+            return;
+        }
+        XCBTitleBar *titlebar = (XCBTitleBar*)titlebarWindow;
+
+        NSLog(@"Rerendering titlebar '%@' as %@", titlebar.windowTitle, isActive ? @"active" : @"inactive");
+
+        // Render with GSTheme
+        [URSThemeIntegration renderGSThemeToWindow:frame
+                                             frame:frame
+                                             title:[titlebar windowTitle]
+                                            active:isActive];
+
+        // Update background pixmap and redraw
+        [titlebar putWindowBackgroundWithPixmap:[titlebar pixmap]];
+        [titlebar drawArea:[titlebar windowRect]];
+        [connection flush];
+
+    } @catch (NSException *exception) {
+        NSLog(@"Exception in rerenderTitlebarForFrame: %@", exception.reason);
     }
 }
 
