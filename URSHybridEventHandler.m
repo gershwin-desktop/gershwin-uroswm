@@ -722,16 +722,23 @@
     @try {
         // Find the window that was clicked
         XCBWindow *window = [connection windowForXCBId:pressEvent->event];
+        NSLog(@"GSTheme: handleTitlebarButtonPress for window ID %u, window object: %@",
+              pressEvent->event, window ? NSStringFromClass([window class]) : @"nil");
+
         if (!window) {
+            NSLog(@"GSTheme: No window found for ID %u", pressEvent->event);
             return NO;
         }
 
         // Check if it's an XCBTitleBar (GSTheme renders to XCBTitleBar, not a separate class)
         if (![window isKindOfClass:[XCBTitleBar class]]) {
+            NSLog(@"GSTheme: Window is not XCBTitleBar, it's %@", NSStringFromClass([window class]));
             return NO;
         }
 
         XCBTitleBar *titlebar = (XCBTitleBar*)window;
+        NSLog(@"GSTheme: Found titlebar, parentWindow: %@",
+              [titlebar parentWindow] ? NSStringFromClass([[titlebar parentWindow] class]) : @"nil");
 
         // Check which button was clicked using the button layout
         NSPoint clickPoint = NSMakePoint(pressEvent->event_x, pressEvent->event_y);
@@ -766,30 +773,55 @@
                 break;
 
             case GSThemeTitleBarButtonZoom:
-                NSLog(@"GSTheme: Zoom button clicked");
+                NSLog(@"GSTheme: Zoom button clicked, frame isMaximized: %d", [frame isMaximized]);
                 if ([frame isMaximized]) {
                     // Restore from maximized
                     NSLog(@"GSTheme: Restoring window from maximized state");
                     [frame restoreDimensionAndPosition];
+
+                    // Recreate the titlebar pixmap at the restored size
+                    [titlebar destroyPixmap];
+                    [titlebar createPixmap];
+                    NSLog(@"GSTheme: Titlebar pixmap recreated for restored size");
+
+                    // Redraw titlebar with GSTheme at restored size
+                    [URSThemeIntegration renderGSThemeToWindow:frame
+                                                         frame:frame
+                                                         title:[titlebar windowTitle]
+                                                        active:YES];
+                    NSLog(@"GSTheme: Restore complete, titlebar redrawn");
                 } else {
                     // Maximize to screen size
                     NSLog(@"GSTheme: Maximizing window");
                     XCBScreen *screen = [frame onScreen];
                     XCBSize size = XCBMakeSize([screen width], [screen height]);
                     XCBPoint position = XCBMakePoint(0.0, 0.0);
+
                     [frame maximizeToSize:size andPosition:position];
 
-                    // Also resize titlebar and client window
+                    // Resize titlebar and client window
                     uint16_t titleHgt = [titlebar windowRect].size.height;
                     XCBSize titleSize = XCBMakeSize([screen width], titleHgt);
                     [titlebar maximizeToSize:titleSize andPosition:XCBMakePoint(0.0, 0.0)];
-                    [titlebar drawTitleBarComponents];
+
+                    // Recreate the titlebar pixmap at the new size
+                    [titlebar destroyPixmap];
+                    [titlebar createPixmap];
+                    NSLog(@"GSTheme: Titlebar pixmap recreated for maximized size %dx%d",
+                          [screen width], titleHgt);
 
                     if (clientWindow) {
                         XCBSize clientSize = XCBMakeSize([screen width], [screen height] - titleHgt);
                         XCBPoint clientPos = XCBMakePoint(0.0, titleHgt - 1);
                         [clientWindow maximizeToSize:clientSize andPosition:clientPos];
                     }
+
+                    // Redraw titlebar with GSTheme at new size
+                    [URSThemeIntegration renderGSThemeToWindow:frame
+                                                         frame:frame
+                                                         title:[titlebar windowTitle]
+                                                        active:YES];
+                    NSLog(@"GSTheme: Maximize complete, titlebar redrawn at new size");
                 }
                 break;
 
