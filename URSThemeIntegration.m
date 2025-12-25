@@ -205,8 +205,9 @@ static URSThemeIntegration *sharedInstance = nil;
 
         [titlebarImage lockFocus];
 
-        // Clear background
-        [[NSColor clearColor] set];
+        // Clear background with titlebar background color (not transparent!)
+        // Using transparent would leave garbage pixels from uninitialized pixmap
+        [[NSColor lightGrayColor] set];
         NSRectFill(NSMakeRect(0, 0, titlebarSize.width, titlebarSize.height));
 
         // Define the titlebar rect
@@ -441,10 +442,10 @@ static URSThemeIntegration *sharedInstance = nil;
 
     NSLog(@"Painting GSTheme image to X11 surface...");
 
-    // Clear and paint GSTheme image to X11 surface
-    cairo_set_operator(ctx, CAIRO_OPERATOR_CLEAR);
-    cairo_paint(ctx);
-    cairo_set_operator(ctx, CAIRO_OPERATOR_OVER);
+    // Paint GSTheme image to X11 surface using SOURCE operator
+    // SOURCE completely replaces destination pixels (no compositing)
+    // This prevents old pixmap garbage from showing through
+    cairo_set_operator(ctx, CAIRO_OPERATOR_SOURCE);
     cairo_set_source_surface(ctx, imageSurface, 0, 0);
     cairo_paint(ctx);
     cairo_surface_flush(x11Surface);
@@ -534,8 +535,9 @@ static URSThemeIntegration *sharedInstance = nil;
 
         [titlebarImage lockFocus];
 
-        // Clear background
-        [[NSColor clearColor] set];
+        // Clear background with titlebar background color (not transparent!)
+        // Using transparent would leave garbage pixels from uninitialized pixmap
+        [[NSColor lightGrayColor] set];
         NSRectFill(NSMakeRect(0, 0, titlebarSize.width, titlebarSize.height));
 
         // Use GSTheme to draw titlebar decoration with all button types

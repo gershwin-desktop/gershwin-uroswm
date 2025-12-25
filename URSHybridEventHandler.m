@@ -188,8 +188,11 @@
                 continue; // Process the next event instead
             } else {
                 // No more events, process the motion
+                // STEP 1: Clear background pixmap BEFORE resize to prevent X11 tiling
+                [self clearTitlebarBackgroundBeforeResize:lastMotionEvent];
+                // STEP 2: Let xcbkit resize the windows
                 [connection handleMotionNotify:lastMotionEvent];
-                // Update titlebar after xcbkit resizes the window
+                // STEP 3: Render new content and set as background
                 [self handleResizeDuringMotion:lastMotionEvent];
                 needFlush = YES;
                 free(lastMotionEvent);
@@ -682,6 +685,33 @@
 }
 
 #pragma mark - Resize Handling
+
+- (void)clearTitlebarBackgroundBeforeResize:(xcb_motion_notify_event_t*)motionEvent {
+    @try {
+        // Find the frame
+        XCBWindow *window = [connection windowForXCBId:motionEvent->event];
+        if (!window || ![window isKindOfClass:[XCBFrame class]]) {
+            return;
+        }
+        XCBFrame *frame = (XCBFrame*)window;
+
+        // Get the titlebar
+        XCBWindow *titlebarWindow = [frame childWindowForKey:TitleBar];
+        if (!titlebarWindow || ![titlebarWindow isKindOfClass:[XCBTitleBar class]]) {
+            return;
+        }
+
+        // Set background to NONE to prevent X11 from tiling the old pixmap
+        // XCB_BACK_PIXMAP_NONE = 0
+        uint32_t value = 0; // XCB_BACK_PIXMAP_NONE
+        xcb_change_window_attributes([connection connection],
+                                     [titlebarWindow window],
+                                     XCB_CW_BACK_PIXMAP,
+                                     &value);
+    } @catch (NSException *exception) {
+        // Silently ignore
+    }
+}
 
 - (void)handleResizeDuringMotion:(xcb_motion_notify_event_t*)motionEvent {
     @try {
