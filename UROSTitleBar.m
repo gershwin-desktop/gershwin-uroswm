@@ -15,13 +15,19 @@
 
 - (instancetype)initWithConnection:(XCBConnection*)connection
                              frame:(NSRect)frame
-                      parentWindow:(xcb_window_t)parentWindow {
+                      parentWindow:(xcb_window_t)parentWindow
+                             depth:(uint8_t)depth
+                            visual:(xcb_visualtype_t*)visual
+                          colormap:(xcb_colormap_t)colormap {
     self = [super init];
     if (self) {
         self.connection = connection;
         self.frame = frame;
         self.isActive = YES;
-        self.title = @"";
+        _title = @"";  // Use ivar directly to avoid triggering render
+        self.depth = depth;
+        self.visualType = visual;
+        self.colormap = colormap;
 
         // Create our own X11 window for the titlebar
         [self createTitlebarWindow:parentWindow];
@@ -29,7 +35,7 @@
         // Create pixmap for rendering
         [self createPixmap];
 
-        NSLog(@"UROSTitleBar: Created independent titlebar %u", self.windowId);
+        NSLog(@"UROSTitleBar: Created independent titlebar %u (depth %d)", self.windowId, depth);
     }
     return self;
 }
@@ -38,48 +44,80 @@
     // Get the screen info
     XCBScreen *screen = [[self.connection screens] objectAtIndex:0];
 
-    // Create our titlebar window
-    uint32_t mask = XCB_CW_BACK_PIXEL | XCB_CW_EVENT_MASK;
-    uint32_t values[2];
-    values[0] = [screen screen]->white_pixel;
-    values[1] = XCB_EVENT_MASK_EXPOSURE | XCB_EVENT_MASK_BUTTON_PRESS |
-                XCB_EVENT_MASK_BUTTON_RELEASE | XCB_EVENT_MASK_POINTER_MOTION |
-                XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_LEAVE_WINDOW;
-
     self.windowId = xcb_generate_id([self.connection connection]);
 
-    xcb_create_window([self.connection connection],
-                      XCB_COPY_FROM_PARENT,
-                      self.windowId,
-                      parentWindow,
-                      (int16_t)self.frame.origin.x,
-                      (int16_t)self.frame.origin.y,
-                      (uint16_t)self.frame.size.width,
-                      (uint16_t)self.frame.size.height,
-                      0, // border width
-                      XCB_WINDOW_CLASS_INPUT_OUTPUT,
-                      [screen screen]->root_visual,
-                      mask,
-                      values);
+    // Use the same depth/visual/colormap as passed (matches parent frame)
+    if (self.depth == 32 && self.visualType && self.colormap != XCB_NONE) {
+        // ARGB window - need colormap
+        uint32_t mask = XCB_CW_BACK_PIXMAP | XCB_CW_BORDER_PIXEL | XCB_CW_COLORMAP | XCB_CW_EVENT_MASK;
+        uint32_t values[4];
+        values[0] = XCB_BACK_PIXMAP_NONE;
+        values[1] = 0;
+        values[2] = self.colormap;
+        values[3] = XCB_EVENT_MASK_EXPOSURE | XCB_EVENT_MASK_BUTTON_PRESS |
+                    XCB_EVENT_MASK_BUTTON_RELEASE | XCB_EVENT_MASK_POINTER_MOTION |
+                    XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_LEAVE_WINDOW;
 
-    // Set up visual
-    self.visual = [[XCBVisual alloc] initWithVisualId:[screen screen]->root_visual];
-    [self.visual setVisualTypeForScreen:screen];
+        xcb_create_window([self.connection connection],
+                          32,  // 32-bit depth
+                          self.windowId,
+                          parentWindow,
+                          (int16_t)self.frame.origin.x,
+                          (int16_t)self.frame.origin.y,
+                          (uint16_t)self.frame.size.width,
+                          (uint16_t)self.frame.size.height,
+                          0, // border width
+                          XCB_WINDOW_CLASS_INPUT_OUTPUT,
+                          self.visualType->visual_id,
+                          mask,
+                          values);
 
-    NSLog(@"UROSTitleBar: Created X11 window %u", self.windowId);
+        NSLog(@"UROSTitleBar: Created 32-bit ARGB titlebar window %u", self.windowId);
+    } else {
+        // Standard 24-bit window
+        uint32_t mask = XCB_CW_BACK_PIXEL | XCB_CW_EVENT_MASK;
+        uint32_t values[2];
+        values[0] = [screen screen]->white_pixel;
+        values[1] = XCB_EVENT_MASK_EXPOSURE | XCB_EVENT_MASK_BUTTON_PRESS |
+                    XCB_EVENT_MASK_BUTTON_RELEASE | XCB_EVENT_MASK_POINTER_MOTION |
+                    XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_LEAVE_WINDOW;
+
+        xcb_create_window([self.connection connection],
+                          [screen screen]->root_depth,
+                          self.windowId,
+                          parentWindow,
+                          (int16_t)self.frame.origin.x,
+                          (int16_t)self.frame.origin.y,
+                          (uint16_t)self.frame.size.width,
+                          (uint16_t)self.frame.size.height,
+                          0, // border width
+                          XCB_WINDOW_CLASS_INPUT_OUTPUT,
+                          [screen screen]->root_visual,
+                          mask,
+                          values);
+
+        // Set up visual for standard window
+        self.visual = [[XCBVisual alloc] initWithVisualId:[screen screen]->root_visual];
+        [self.visual setVisualTypeForScreen:screen];
+
+        NSLog(@"UROSTitleBar: Created 24-bit titlebar window %u", self.windowId);
+    }
 }
 
 - (void)createPixmap {
     self.pixmap = xcb_generate_id([self.connection connection]);
 
+    // Use the same depth as the window
+    uint8_t pixmapDepth = self.depth > 0 ? self.depth : 24;
+
     xcb_create_pixmap([self.connection connection],
-                      24, // depth
+                      pixmapDepth,
                       self.pixmap,
                       self.windowId,
                       (uint16_t)self.frame.size.width,
                       (uint16_t)self.frame.size.height);
 
-    NSLog(@"UROSTitleBar: Created pixmap %u", self.pixmap);
+    NSLog(@"UROSTitleBar: Created pixmap %u (depth %d)", self.pixmap, pixmapDepth);
 }
 
 - (void)renderWithGSTheme {
@@ -150,17 +188,29 @@
         return;
     }
 
+    // Determine which visual to use for Cairo surface
+    xcb_visualtype_t *cairoVisual = self.visualType;
+    if (!cairoVisual && self.visual) {
+        cairoVisual = [self.visual visualType];
+    }
+
+    if (!cairoVisual) {
+        NSLog(@"UROSTitleBar: No visual available for Cairo surface");
+        return;
+    }
+
     // Create Cairo surface for pixmap
     cairo_surface_t *pixmapSurface = cairo_xcb_surface_create(
         [self.connection connection],
         self.pixmap,
-        [self.visual visualType],
+        cairoVisual,
         (int)self.frame.size.width,
         (int)self.frame.size.height
     );
 
     if (cairo_surface_status(pixmapSurface) != CAIRO_STATUS_SUCCESS) {
-        NSLog(@"UROSTitleBar: Failed to create Cairo pixmap surface");
+        NSLog(@"UROSTitleBar: Failed to create Cairo pixmap surface: %s",
+              cairo_status_to_string(cairo_surface_status(pixmapSurface)));
         cairo_surface_destroy(pixmapSurface);
         return;
     }
@@ -197,14 +247,24 @@
 }
 
 - (void)copyPixmapToWindow {
-    xcb_copy_area([self.connection connection],
+    xcb_connection_t *conn = [self.connection connection];
+
+    // Create a GC for the copy operation
+    xcb_gcontext_t gc = xcb_generate_id(conn);
+    uint32_t gcMask = XCB_GC_GRAPHICS_EXPOSURES;
+    uint32_t gcValues[] = { 0 };
+    xcb_create_gc(conn, gc, self.windowId, gcMask, gcValues);
+
+    xcb_copy_area(conn,
                   self.pixmap,
                   self.windowId,
-                  xcb_generate_id([self.connection connection]), // GC
+                  gc,
                   0, 0, // src x, y
                   0, 0, // dst x, y
                   (uint16_t)self.frame.size.width,
                   (uint16_t)self.frame.size.height);
+
+    xcb_free_gc(conn, gc);
 }
 
 - (void)setTitle:(NSString*)title {

@@ -13,10 +13,12 @@
 #import <XCBKit/XCBScreen.h>
 #import <xcb/xcb.h>
 #import <xcb/xcb_icccm.h>
+#import <xcb/damage.h>
 #import <XCBKit/services/EWMHService.h>
 #import <XCBKit/XCBFrame.h>
 #import "URSThemeIntegration.h"
 #import "GSThemeTitleBar.h"
+#import "UROSWindowDecorator.h"
 
 @implementation URSHybridEventHandler
 
@@ -107,6 +109,19 @@
     EWMHService *ewmhService = [EWMHService sharedInstanceWithConnection:connection];
     [ewmhService putPropertiesForRootWindow:[screen rootWindow] andWmWindow:selectionManagerWindow];
     [connection flush];
+
+    // Initialize compositor for ARGB visual support (smooth rounded corners and shadows)
+    self.compositor = [[UROSCompositor alloc] initWithConnection:connection screen:screen];
+    if (self.compositor) {
+        [self.compositor start];
+        if ([self.compositor isActive]) {
+            // Pass compositor to window decorator for ARGB frame creation
+            [UROSWindowDecorator setCompositor:self.compositor];
+            NSLog(@"UROSCompositor: ARGB visual available for window frames");
+        } else {
+            NSLog(@"UROSCompositor: No ARGB visual, using fallback rendering");
+        }
+    }
 
     // ARC handles cleanup automatically
 
@@ -231,8 +246,17 @@
 
 - (void)processXCBEvent:(xcb_generic_event_t*)event
 {
+    uint8_t eventType = event->response_type & ~0x80;
+
+    // Debug: Log MAP_REQUEST events
+    if (eventType == XCB_MAP_REQUEST) {
+        xcb_map_request_event_t *mapReq = (xcb_map_request_event_t *)event;
+        NSLog(@"DEBUG: XCB_MAP_REQUEST received for window %u (parent %u)",
+              mapReq->window, mapReq->parent);
+    }
+
     // Process individual XCB event (same logic as original startEventHandlerLoop)
-    switch (event->response_type & ~0x80) {
+    switch (eventType) {
         case XCB_VISIBILITY_NOTIFY: {
             xcb_visibility_notify_event_t *visibilityEvent = (xcb_visibility_notify_event_t *)event;
             [connection handleVisibilityEvent:visibilityEvent];
@@ -240,10 +264,19 @@
         }
         case XCB_EXPOSE: {
             xcb_expose_event_t *exposeEvent = (xcb_expose_event_t *)event;
-            [connection handleExpose:exposeEvent];
 
-            // Re-apply GSTheme if this is a titlebar expose event
-            [self handleTitlebarExpose:exposeEvent];
+            // Check if UROSWindowDecorator handles this expose event (frame or titlebar)
+            if (![UROSWindowDecorator handleExposeEvent:exposeEvent]) {
+                // Not our frame, let XCBKit handle it
+                [connection handleExpose:exposeEvent];
+                // Re-apply GSTheme if this is a titlebar expose event
+                [self handleTitlebarExpose:exposeEvent];
+            }
+
+            // Trigger compositor refresh on any expose
+            if (self.compositor && self.compositor.isActive) {
+                [self.compositor compositeScreen];
+            }
             break;
         }
         case XCB_ENTER_NOTIFY: {
@@ -294,29 +327,45 @@
         case XCB_MAP_NOTIFY: {
             xcb_map_notify_event_t *notifyEvent = (xcb_map_notify_event_t *)event;
             [connection handleMapNotify:notifyEvent];
+            // Composite screen when window is mapped
+            if (self.compositor && self.compositor.isActive) {
+                [self.compositor compositeScreen];
+            }
             break;
         }
         case XCB_MAP_REQUEST: {
             xcb_map_request_event_t *mapRequestEvent = (xcb_map_request_event_t *)event;
+            xcb_window_t clientWindow = mapRequestEvent->window;
 
-            // Let XCBConnection handle the map request normally (this creates titlebar structure)
+            // Use standard XCBKit handling for now
+            // TODO: ARGB frame decoration needs more work
             [connection handleMapRequest:mapRequestEvent];
 
             // Hide borders for windows with fixed sizes (like info panels and logout)
-            [self adjustBorderForFixedSizeWindow:mapRequestEvent->window];
+            [self adjustBorderForFixedSizeWindow:clientWindow];
 
             // Apply GSTheme immediately with no delay
-            [self applyGSThemeToRecentlyMappedWindow:[NSNumber numberWithUnsignedInt:mapRequestEvent->window]];
+            [self applyGSThemeToRecentlyMappedWindow:[NSNumber numberWithUnsignedInt:clientWindow]];
             break;
         }
         case XCB_UNMAP_NOTIFY: {
             xcb_unmap_notify_event_t *unmapNotifyEvent = (xcb_unmap_notify_event_t *)event;
             [connection handleUnMapNotify:unmapNotifyEvent];
+            // Recomposite when window is unmapped
+            if (self.compositor && self.compositor.isActive) {
+                [self.compositor compositeScreen];
+            }
             break;
         }
         case XCB_DESTROY_NOTIFY: {
             xcb_destroy_notify_event_t *destroyNotify = (xcb_destroy_notify_event_t *)event;
+            // Clean up any ARGB frame decorations
+            [UROSWindowDecorator undecoateWindow:destroyNotify->window];
             [connection handleDestroyNotify:destroyNotify];
+            // Recomposite when window is destroyed
+            if (self.compositor && self.compositor.isActive) {
+                [self.compositor compositeScreen];
+            }
             break;
         }
         case XCB_CLIENT_MESSAGE: {
@@ -332,6 +381,10 @@
         case XCB_CONFIGURE_NOTIFY: {
             xcb_configure_notify_event_t *configureNotify = (xcb_configure_notify_event_t *)event;
             [connection handleConfigureNotify:configureNotify];
+            // Composite screen when window is reconfigured
+            if (self.compositor && self.compositor.isActive) {
+                [self.compositor compositeScreen];
+            }
             break;
         }
         case XCB_PROPERTY_NOTIFY: {
@@ -339,8 +392,21 @@
             [connection handlePropertyNotify:propEvent];
             break;
         }
-        default:
+        default: {
+            // Check for damage events
+            if (self.compositor && self.compositor.isActive) {
+                uint8_t damageBase = self.compositor.damageEventBase;
+                if (damageBase > 0 && (event->response_type & ~0x80) == (damageBase + XCB_DAMAGE_NOTIFY)) {
+                    xcb_damage_notify_event_t *damageEvent = (xcb_damage_notify_event_t *)event;
+                    [self.compositor handleDamageEvent:damageEvent->drawable
+                                                     x:damageEvent->area.x
+                                                     y:damageEvent->area.y
+                                                 width:damageEvent->area.width
+                                                height:damageEvent->area.height];
+                }
+            }
             break;
+        }
     }
 }
 
@@ -894,6 +960,16 @@
             // Copy the pixmap to the window immediately
             [titlebar drawArea:titlebarRect];
 
+            // Update ARGB frame for client (if using UROSWindowDecorator)
+            XCBWindow *clientWindow = [frame childWindowForKey:ClientWindow];
+            if (clientWindow) {
+                XCBRect clientRect = [clientWindow windowRect];
+                [UROSWindowDecorator updateFrameForClient:[clientWindow window]
+                                               connection:connection
+                                                    width:clientRect.size.width
+                                                   height:clientRect.size.height];
+            }
+
             [connection flush];
         }
     } @catch (NSException *exception) {
@@ -957,6 +1033,16 @@
 
             [connection flush];
             NSLog(@"GSTheme: Titlebar redrawn after resize");
+        }
+
+        // Update ARGB frame for client (if using UROSWindowDecorator)
+        XCBWindow *clientWindow = [frame childWindowForKey:ClientWindow];
+        if (clientWindow) {
+            XCBRect clientRect = [clientWindow windowRect];
+            [UROSWindowDecorator updateFrameForClient:[clientWindow window]
+                                           connection:connection
+                                                width:clientRect.size.width
+                                               height:clientRect.size.height];
         }
     } @catch (NSException *exception) {
         NSLog(@"Exception in handleResizeComplete: %@", exception.reason);

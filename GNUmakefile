@@ -20,15 +20,21 @@ $(APP_NAME)_OBJC_FILES = \
 		URSHybridEventHandler.m \
 		UROSWMApplication.m \
 		URSThemeIntegration.m \
-		GSThemeTitleBar.m
+		GSThemeTitleBar.m \
+		UROSWindowDecorator.m \
+		UROSTitleBar.m \
+		UROSCompositor.m
 
 $(APP_NAME)_HEADER_FILES = \
 		URSHybridEventHandler.h \
 		UROSWMApplication.h \
 		URSThemeIntegration.h \
-		GSThemeTitleBar.h
+		GSThemeTitleBar.h \
+		UROSWindowDecorator.h \
+		UROSTitleBar.h \
+		UROSCompositor.h
 
-$(APP_NAME)_GUI_LIBS = -lXCBKit -lxcb -lxcb-icccm $(shell pkg-config --libs cairo xcb)
+$(APP_NAME)_GUI_LIBS = -lXCBKit -lxcb -lxcb-icccm -lxcb-composite -lxcb-damage -lxcb-util $(shell pkg-config --libs cairo xcb)
 
 ADDITIONAL_OBJCFLAGS = -std=c99 -g -O0 -fobjc-arc -Wall -Wno-typedef-redefinition #-Wno-unused -Werror -Wall
 

@@ -15,6 +15,7 @@
 #import <XCBKit/XCBWindow.h>
 #import <XCBKit/XCBTitleBar.h>
 #import "URSThemeIntegration.h"
+#import "UROSCompositor.h"
 
 // Use GNUstep's existing RunLoopEventType and RunLoopEvents protocol
 // (already defined in Foundation/NSRunLoop.h)
@@ -24,6 +25,9 @@
 // XCB Integration Properties (same as original URSEventHandler)
 @property (strong, nonatomic) XCBConnection* connection;
 @property (strong, nonatomic) XCBWindow* selectionManagerWindow;
+
+// Compositor for smooth rendering and shadows
+@property (strong, nonatomic) UROSCompositor* compositor;
 
 // Phase 1 Validation Properties
 @property (assign, nonatomic) BOOL xcbEventsIntegrated;

@@ -23,11 +23,17 @@
 @property (strong, nonatomic) NSString *title;
 @property (assign, nonatomic) NSRect frame;
 @property (assign, nonatomic) BOOL isActive;
+@property (assign, nonatomic) uint8_t depth;
+@property (assign, nonatomic) xcb_visualtype_t *visualType;
+@property (assign, nonatomic) xcb_colormap_t colormap;
 
 // Initialization
 - (instancetype)initWithConnection:(XCBConnection*)connection
                              frame:(NSRect)frame
-                      parentWindow:(xcb_window_t)parentWindow;
+                      parentWindow:(xcb_window_t)parentWindow
+                             depth:(uint8_t)depth
+                            visual:(xcb_visualtype_t*)visual
+                          colormap:(xcb_colormap_t)colormap;
 
 // GSTheme rendering
 - (void)renderWithGSTheme;

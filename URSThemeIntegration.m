@@ -12,6 +12,7 @@
 #import <cairo/cairo-xcb.h>
 #import <objc/runtime.h>
 #import "GSThemeTitleBar.h"
+#import "UROSCompositor.h"  // For CORNER_RADIUS
 
 @implementation URSThemeIntegration
 
@@ -262,26 +263,53 @@ static NSMutableSet *fixedSizeWindows = nil;
 
         [titlebarImage lockFocus];
 
-        // Clear background with titlebar background color (not transparent!)
-        // Using transparent would leave garbage pixels from uninitialized pixmap
-        [[NSColor lightGrayColor] set];
-        NSRectFill(NSMakeRect(0, 0, titlebarSize.width, titlebarSize.height));
-
         // Define the titlebar rect
         NSRect titlebarRect = NSMakeRect(0, 0, titlebarSize.width, titlebarSize.height);
 
+        // Clear background with TRANSPARENT for ARGB compositing
+        [[NSColor clearColor] set];
+        NSRectFill(titlebarRect);
+
+        // Create a bezier path with rounded TOP corners only (bottom is square)
+        CGFloat r = (CGFloat)CORNER_RADIUS;
+        CGFloat w = titlebarRect.size.width;
+        CGFloat h = titlebarRect.size.height;
+        NSBezierPath *roundedPath = [NSBezierPath bezierPath];
+
+        // Start at bottom-left and go counter-clockwise (standard for NSBezierPath)
+        [roundedPath moveToPoint:NSMakePoint(0, 0)];                              // bottom-left
+        [roundedPath lineToPoint:NSMakePoint(w, 0)];                              // bottom edge
+        [roundedPath lineToPoint:NSMakePoint(w, h - r)];                          // right edge up
+        // Top-right corner arc (from bottom-right of arc to top of arc)
+        [roundedPath appendBezierPathWithArcFromPoint:NSMakePoint(w, h)
+                                              toPoint:NSMakePoint(w - r, h)
+                                               radius:r];
+        [roundedPath lineToPoint:NSMakePoint(r, h)];                              // top edge
+        // Top-left corner arc
+        [roundedPath appendBezierPathWithArcFromPoint:NSMakePoint(0, h)
+                                              toPoint:NSMakePoint(0, h - r)
+                                               radius:r];
+        [roundedPath closePath];                                                  // left edge down
+
+        // CLIP to the rounded path - everything drawn after this stays inside
+        [NSGraphicsContext saveGraphicsState];
+        [roundedPath addClip];
+
+        // Fill with the titlebar background color from the theme (inside the clipped region)
+        // Use windowFrameColor which GSTheme uses for titlebar background
+        NSColor *titlebarColor = [NSColor windowFrameColor];
+        if (!titlebarColor) {
+            titlebarColor = [NSColor lightGrayColor]; // Fallback
+        }
+        [titlebarColor set];
+        NSRectFill(titlebarRect);
+
+        // NOTE: We do NOT call [theme drawWindowBorder:...] - it fills the full rect
         // Use GSTheme to draw titlebar decoration with all button types
         NSUInteger styleMask = NSTitledWindowMask | NSClosableWindowMask | NSMiniaturizableWindowMask | NSResizableWindowMask;
-        GSThemeControlState state = isActive ? GSThemeNormalState : GSThemeSelectedState;
+        // GSThemeControlState state = isActive ? GSThemeNormalState : GSThemeSelectedState; // For future use
 
-        NSLog(@"Drawing GSTheme titlebar with styleMask: 0x%lx, state: %d", (unsigned long)styleMask, (int)state);
-
-        // Draw the window titlebar using GSTheme
-        [theme drawWindowBorder:titlebarRect
-                      withFrame:titlebarRect
-                   forStyleMask:styleMask
-                          state:state
-                       andTitle:title ?: @""];
+        NSLog(@"Drawing GSTheme titlebar with rounded corners (radius=%d), active=%d", CORNER_RADIUS, isActive);
 
         // Add properly positioned buttons using Rik theme specifications
         // Based on Rik theme analysis: 17px spacing, LEFT-aligned (miniaturize first, then close)
@@ -355,6 +383,9 @@ static NSMutableSet *fixedSizeWindows = nil;
                 }
             }
         }
+
+        // Restore graphics state (removes the rounded clipping path)
+        [NSGraphicsContext restoreGraphicsState];
 
         [titlebarImage unlockFocus];
 
@@ -669,18 +700,50 @@ static NSMutableSet *fixedSizeWindows = nil;
 
         [titlebarImage lockFocus];
 
-        // Clear background with titlebar background color (not transparent!)
-        // Using transparent would leave garbage pixels from uninitialized pixmap
-        [[NSColor lightGrayColor] set];
-        NSRectFill(NSMakeRect(0, 0, titlebarSize.width, titlebarSize.height));
-
-        // DEBUG: Draw bright red line at right edge to see exactly where titlebar ends
-        [[NSColor redColor] set];
-        NSRectFill(NSMakeRect(titlebarSize.width - 3, 0, 3, titlebarSize.height));
-        NSLog(@"DEBUG: Drew red marker at x=%d (titlebar width=%d)", (int)(titlebarSize.width - 3), (int)titlebarSize.width);
-
-        // Use GSTheme to draw titlebar decoration
+        // Define the titlebar rect
         NSRect drawRect = NSMakeRect(0, 0, titlebarSize.width, titlebarSize.height);
+
+        // Clear background with TRANSPARENT for ARGB compositing
+        // The corners will be transparent for the compositor to blend
+        [[NSColor clearColor] set];
+        NSRectFill(drawRect);
+
+        // Create a bezier path with rounded TOP corners only (bottom is square)
+        // This is the key to getting transparent rounded corners!
+        CGFloat r = (CGFloat)CORNER_RADIUS;
+        CGFloat w = drawRect.size.width;
+        CGFloat h = drawRect.size.height;
+        NSBezierPath *roundedPath = [NSBezierPath bezierPath];
+
+        // Start at bottom-left and go counter-clockwise (standard for NSBezierPath)
+        [roundedPath moveToPoint:NSMakePoint(0, 0)];                              // bottom-left
+        [roundedPath lineToPoint:NSMakePoint(w, 0)];                              // bottom edge
+        [roundedPath lineToPoint:NSMakePoint(w, h - r)];                          // right edge up
+        // Top-right corner arc (from bottom-right of arc to top of arc)
+        [roundedPath appendBezierPathWithArcFromPoint:NSMakePoint(w, h)
+                                              toPoint:NSMakePoint(w - r, h)
+                                               radius:r];
+        [roundedPath lineToPoint:NSMakePoint(r, h)];                              // top edge
+        // Top-left corner arc
+        [roundedPath appendBezierPathWithArcFromPoint:NSMakePoint(0, h)
+                                              toPoint:NSMakePoint(0, h - r)
+                                               radius:r];
+        [roundedPath closePath];                                                  // left edge down
+
+        // CLIP to the rounded path - everything drawn after this stays inside
+        [NSGraphicsContext saveGraphicsState];
+        [roundedPath addClip];
+
+        // Now fill with the titlebar background color from the theme (inside the clipped region)
+        // Use windowFrameColor which GSTheme uses for titlebar background
+        NSColor *titlebarColor = [NSColor windowFrameColor];
+        if (!titlebarColor) {
+            titlebarColor = [NSColor lightGrayColor]; // Fallback
+        }
+        [titlebarColor set];
+        NSRectFill(drawRect);
+
+        NSLog(@"Drawing titlebar with rounded corners (radius=%d) for transparent compositing", CORNER_RADIUS);
 
         // Check if this is a fixed-size window (only show close button)
         XCBWindow *clientWindow = [frame childWindowForKey:ClientWindow];
@@ -748,12 +811,9 @@ static NSMutableSet *fixedSizeWindows = nil;
             NSLog(@"Using theme font: %@ %.1f", themeFontName, themeFontSize);
         }
 
-        // Draw the window titlebar using GSTheme (but without title text first)
-        [theme drawWindowBorder:drawRect
-                      withFrame:drawRect
-                   forStyleMask:styleMask
-                          state:state
-                       andTitle:@""];  // Empty title, we'll draw it manually
+        // NOTE: We do NOT call [theme drawWindowBorder:...] because it fills the
+        // entire rect with a solid color, destroying our transparent rounded corners.
+        // Instead, we draw everything manually inside the rounded clip path.
 
         // Manually draw the title text with the correct theme font
         if (title && [title length] > 0) {
@@ -1051,6 +1111,9 @@ static NSMutableSet *fixedSizeWindows = nil;
                 }
             }
         }
+
+        // Restore graphics state (removes the rounded clipping path)
+        [NSGraphicsContext restoreGraphicsState];
 
         [titlebarImage unlockFocus];
 
