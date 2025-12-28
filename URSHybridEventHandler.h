@@ -34,7 +34,7 @@
 - (void)registerAsWindowManager;
 
 // Window type checking
-- (BOOL)isSplashScreenWindow:(xcb_window_t)windowId;
+- (BOOL)shouldSkipDecorationForWindow:(xcb_window_t)windowId;
 
 // New NSRunLoop Integration methods
 - (void)setupXCBEventIntegration;

@@ -299,10 +299,10 @@
         case XCB_MAP_REQUEST: {
             xcb_map_request_event_t *mapRequestEvent = (xcb_map_request_event_t *)event;
 
-            // Check if this is a splash screen window
-            if ([self isSplashScreenWindow:mapRequestEvent->window]) {
-                // For splash screens, just map the window without decoration
-                NSLog(@"Mapping splash screen window %u without decoration", mapRequestEvent->window);
+            // Check if this window should skip decoration (splash, dock, motif hints, etc.)
+            if ([self shouldSkipDecorationForWindow:mapRequestEvent->window]) {
+                // For windows that shouldn't be decorated, just map them directly
+                NSLog(@"Mapping window %u without decoration", mapRequestEvent->window);
                 xcb_map_window([connection connection], mapRequestEvent->window);
                 // Don't call handleMapRequest which would decorate it
             } else {
@@ -627,9 +627,10 @@
     }
 }
 
-- (BOOL)isSplashScreenWindow:(xcb_window_t)windowId {
+- (BOOL)shouldSkipDecorationForWindow:(xcb_window_t)windowId {
     @try {
         EWMHService *ewmhService = [EWMHService sharedInstanceWithConnection:connection];
+        XCBAtomService *atomService = ewmhService.atomService;
         
         // Get the XCBWindow object for this window ID
         XCBWindow *window = [connection windowForXCBId:windowId];
@@ -640,40 +641,92 @@
             [window setConnection:connection];
         }
         
-        // Get the _NET_WM_WINDOW_TYPE property using EWMHService
-        xcb_get_property_reply_t *reply = (xcb_get_property_reply_t *)[ewmhService getProperty:ewmhService.EWMHWMWindowType
-                                                                                    propertyType:XCB_ATOM_ATOM
-                                                                                       forWindow:window
-                                                                                          delete:NO
-                                                                                          length:32];
+        // Check 1: Motif WM Hints (_MOTIF_WM_HINTS)
+        // This is the most common way for applications to request no decorations
+        xcb_get_property_reply_t *motifReply = (xcb_get_property_reply_t *)[ewmhService getProperty:ewmhService.MotifWMHints
+                                                                                         propertyType:XCB_ATOM_ANY
+                                                                                            forWindow:window
+                                                                                               delete:NO
+                                                                                               length:5];
         
-        if (!reply) {
-            return NO;
-        }
-        
-        BOOL isSplash = NO;
-        
-        if (reply->type == XCB_ATOM_ATOM && reply->format == 32 && reply->value_len > 0) {
-            // Get the atom for _NET_WM_WINDOW_TYPE_SPLASH
-            XCBAtomService *atomService = ewmhService.atomService;
-            xcb_atom_t splashAtom = [atomService atomFromCachedAtomsWithKey:ewmhService.EWMHWMWindowTypeSplash];
+        if (motifReply && motifReply->value_len >= 5) {
+            // Motif hints structure: flags, functions, decorations, input_mode, status
+            uint32_t *hints = (uint32_t *)xcb_get_property_value(motifReply);
+            uint32_t flags = hints[0];
+            uint32_t decorations = hints[2];
             
-            // Check if any of the window types is SPLASH
-            xcb_atom_t *types = (xcb_atom_t *)xcb_get_property_value(reply);
-            for (uint32_t i = 0; i < reply->value_len; i++) {
+            // Check if MWM_HINTS_DECORATIONS flag is set and decorations is 0
+            if ((flags & MWM_HINTS_DECORATIONS) && decorations == 0) {
+                free(motifReply);
+                NSLog(@"Window %u has Motif hints requesting no decoration, skipping decoration", windowId);
+                return YES;
+            }
+        }
+        if (motifReply) free(motifReply);
+        
+        // Check 2: _NET_WM_WINDOW_TYPE property
+        xcb_get_property_reply_t *typeReply = (xcb_get_property_reply_t *)[ewmhService getProperty:ewmhService.EWMHWMWindowType
+                                                                                        propertyType:XCB_ATOM_ATOM
+                                                                                           forWindow:window
+                                                                                              delete:NO
+                                                                                              length:32];
+        
+        if (typeReply && typeReply->type == XCB_ATOM_ATOM && typeReply->format == 32 && typeReply->value_len > 0) {
+            // Get atoms for window types that should not be decorated
+            xcb_atom_t splashAtom = [atomService atomFromCachedAtomsWithKey:ewmhService.EWMHWMWindowTypeSplash];
+            xcb_atom_t desktopAtom = [atomService atomFromCachedAtomsWithKey:ewmhService.EWMHWMWindowTypeDesktop];
+            xcb_atom_t dockAtom = [atomService atomFromCachedAtomsWithKey:ewmhService.EWMHWMWindowTypeDock];
+            xcb_atom_t toolbarAtom = [atomService atomFromCachedAtomsWithKey:ewmhService.EWMHWMWindowTypeToolbar];
+            xcb_atom_t menuAtom = [atomService atomFromCachedAtomsWithKey:ewmhService.EWMHWMWindowTypeMenu];
+            xcb_atom_t dropdownMenuAtom = [atomService atomFromCachedAtomsWithKey:ewmhService.EWMHWMWindowTypeDropdownMenu];
+            xcb_atom_t popupMenuAtom = [atomService atomFromCachedAtomsWithKey:ewmhService.EWMHWMWindowTypePopupMenu];
+            xcb_atom_t tooltipAtom = [atomService atomFromCachedAtomsWithKey:ewmhService.EWMHWMWindowTypeTooltip];
+            xcb_atom_t notificationAtom = [atomService atomFromCachedAtomsWithKey:ewmhService.EWMHWMWindowTypeNotification];
+            xcb_atom_t comboAtom = [atomService atomFromCachedAtomsWithKey:ewmhService.EWMHWMWindowTypeCombo];
+            xcb_atom_t dndAtom = [atomService atomFromCachedAtomsWithKey:ewmhService.EWMHWMWindowTypeDnd];
+            
+            // Check if any of the window types should skip decoration
+            xcb_atom_t *types = (xcb_atom_t *)xcb_get_property_value(typeReply);
+            for (uint32_t i = 0; i < typeReply->value_len; i++) {
+                const char *typeName = NULL;
+                
                 if (types[i] == splashAtom) {
-                    isSplash = YES;
-                    NSLog(@"Window %u is a splash screen, skipping decoration", windowId);
-                    break;
+                    typeName = "splash";
+                } else if (types[i] == desktopAtom) {
+                    typeName = "desktop";
+                } else if (types[i] == dockAtom) {
+                    typeName = "dock";
+                } else if (types[i] == toolbarAtom) {
+                    typeName = "toolbar";
+                } else if (types[i] == menuAtom) {
+                    typeName = "menu";
+                } else if (types[i] == dropdownMenuAtom) {
+                    typeName = "dropdown menu";
+                } else if (types[i] == popupMenuAtom) {
+                    typeName = "popup menu";
+                } else if (types[i] == tooltipAtom) {
+                    typeName = "tooltip";
+                } else if (types[i] == notificationAtom) {
+                    typeName = "notification";
+                } else if (types[i] == comboAtom) {
+                    typeName = "combo";
+                } else if (types[i] == dndAtom) {
+                    typeName = "dnd";
+                }
+                
+                if (typeName) {
+                    free(typeReply);
+                    NSLog(@"Window %u is a %s window, skipping decoration", windowId, typeName);
+                    return YES;
                 }
             }
         }
+        if (typeReply) free(typeReply);
         
-        free(reply);
-        return isSplash;
+        return NO;
         
     } @catch (NSException *exception) {
-        NSLog(@"Exception checking if window is splash screen: %@", exception.reason);
+        NSLog(@"Exception checking if window should skip decoration: %@", exception.reason);
         return NO;
     }
 }
