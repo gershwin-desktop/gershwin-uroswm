@@ -208,15 +208,33 @@ The following notifications are posted:
 
 ## Building
 
-The XNamespace integration is built as part of the standard build:
+The XNamespace integration is built as part of the Gershwin desktop system using [gershwin-build](https://github.com/gershwin-desktop/gershwin-build).
+
+### Supported Operating Systems
+
+- FreeBSD
+- GhostBSD
+- Arch Linux
+- Debian
+
+### Build Instructions
 
 ```bash
-# Build with GNUstep make system
-make
+# Clone the build system
+git clone https://github.com/gershwin-desktop/gershwin-build.git
+cd gershwin-build
 
-# Install
+# Install build dependencies
+sudo ./bootstrap.sh
+
+# Checkout all Gershwin components (including gershwin-uroswm)
+./checkout.sh
+
+# Build and install the complete Gershwin system
 sudo make install
 ```
+
+For more details, see the [gershwin-build README](https://github.com/gershwin-desktop/gershwin-build/blob/main/README.md).
 
 ## Testing
 
