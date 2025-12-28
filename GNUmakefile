@@ -20,13 +20,19 @@ $(APP_NAME)_OBJC_FILES = \
 		URSHybridEventHandler.m \
 		UROSWMApplication.m \
 		URSThemeIntegration.m \
-		GSThemeTitleBar.m
+		GSThemeTitleBar.m \
+		XNamespaceManager.m \
+		XNamespaceConfigPanel.m \
+		XNamespaceVisualIndicator.m
 
 $(APP_NAME)_HEADER_FILES = \
 		URSHybridEventHandler.h \
 		UROSWMApplication.h \
 		URSThemeIntegration.h \
-		GSThemeTitleBar.h
+		GSThemeTitleBar.h \
+		XNamespaceManager.h \
+		XNamespaceConfigPanel.h \
+		XNamespaceVisualIndicator.h
 
 $(APP_NAME)_GUI_LIBS = -lXCBKit -lxcb -lxcb-icccm $(shell pkg-config --libs cairo xcb)
 

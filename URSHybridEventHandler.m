@@ -17,6 +17,8 @@
 #import <XCBKit/XCBFrame.h>
 #import "URSThemeIntegration.h"
 #import "GSThemeTitleBar.h"
+#import "XNamespaceManager.h"
+#import "XNamespaceVisualIndicator.h"
 
 @implementation URSHybridEventHandler
 
@@ -25,6 +27,8 @@
 @synthesize xcbEventsIntegrated;
 @synthesize nsRunLoopActive;
 @synthesize eventCount;
+@synthesize namespaceManager;
+@synthesize namespaceIndicator;
 
 #pragma mark - Initialization
 
@@ -64,6 +68,9 @@
 
     // Setup XCB event integration with NSRunLoop
     [self setupXCBEventIntegration];
+
+    // Initialize XNamespace support
+    [self initializeXNamespaceSupport];
 
     // Setup simple timer-based theme integration
     [self setupPeriodicThemeIntegration];
@@ -307,6 +314,9 @@
 
             // Apply GSTheme immediately with no delay
             [self applyGSThemeToRecentlyMappedWindow:[NSNumber numberWithUnsignedInt:mapRequestEvent->window]];
+            
+            // Apply XNamespace visual indicator to the new window
+            [self applyNamespaceIndicatorAfterMap:[NSNumber numberWithUnsignedInt:mapRequestEvent->window]];
             break;
         }
         case XCB_UNMAP_NOTIFY: {
@@ -337,9 +347,18 @@
         case XCB_PROPERTY_NOTIFY: {
             xcb_property_notify_event_t *propEvent = (xcb_property_notify_event_t *)event;
             [connection handlePropertyNotify:propEvent];
+            
+            // Also let XNamespace manager handle property changes
+            if (self.namespaceManager) {
+                [self.namespaceManager handlePropertyNotify:propEvent];
+            }
             break;
         }
         default:
+            // Let XNamespace manager handle any extension-specific events
+            if (self.namespaceManager) {
+                [self.namespaceManager handleXCBEvent:event];
+            }
             break;
     }
 }
@@ -725,6 +744,40 @@
 
     } @catch (NSException *exception) {
         NSLog(@"Exception applying GSTheme to recently mapped window: %@", exception.reason);
+    }
+}
+
+- (void)applyNamespaceIndicatorAfterMap:(NSNumber*)windowIdNumber {
+    @try {
+        xcb_window_t windowId = [windowIdNumber unsignedIntValue];
+        
+        if (!self.namespaceIndicator || !self.namespaceManager.visualIndicatorsEnabled) {
+            return;
+        }
+        
+        // Find the frame for this client window
+        NSDictionary *windowsMap = [self.connection windowsMap];
+        
+        for (NSString *mapWindowId in windowsMap) {
+            XCBWindow *window = [windowsMap objectForKey:mapWindowId];
+            
+            if (window && [window isKindOfClass:[XCBFrame class]]) {
+                XCBFrame *frame = (XCBFrame*)window;
+                XCBWindow *clientWindow = [frame childWindowForKey:ClientWindow];
+                
+                // Check if this frame contains our client window
+                if (clientWindow && [clientWindow window] == windowId) {
+                    // Apply namespace visual indicator
+                    [self.namespaceIndicator applyIndicatorToFrame:frame];
+                    
+                    NSLog(@"Applied XNamespace indicator to window %u", windowId);
+                    return;
+                }
+            }
+        }
+        
+    } @catch (NSException *exception) {
+        NSLog(@"Exception applying namespace indicator: %@", exception.reason);
     }
 }
 
@@ -1191,6 +1244,121 @@
     }
 }
 
+#pragma mark - XNamespace Integration
+
+- (void)initializeXNamespaceSupport
+{
+    NSLog(@"Initializing XNamespace support...");
+    
+    // Create and configure the namespace manager
+    self.namespaceManager = [[XNamespaceManager alloc] initWithConnection:self.connection];
+    self.namespaceManager.delegate = self;
+    
+    // Create the visual indicator system
+    self.namespaceIndicator = [[XNamespaceVisualIndicator alloc] initWithManager:self.namespaceManager
+                                                                       connection:self.connection];
+    
+    // Check extension availability
+    if (self.namespaceManager.extensionAvailable) {
+        NSLog(@"XNamespace extension is available on this X server");
+    } else {
+        NSLog(@"XNamespace extension not available - using atom-based simulation");
+    }
+    
+    // Query initial namespaces
+    NSArray *namespaces = [self.namespaceManager queryAvailableNamespaces];
+    NSLog(@"Found %lu namespaces", (unsigned long)[namespaces count]);
+    
+    // Register for namespace notifications
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(handleNamespaceChange:)
+                                                 name:XNamespaceDidChangeNotification
+                                               object:nil];
+    
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(handleNamespaceSecurityViolation:)
+                                                 name:XNamespaceSecurityViolationNotification
+                                               object:nil];
+    
+    NSLog(@"XNamespace support initialized successfully");
+}
+
+- (void)applyNamespaceIndicatorToFrame:(XCBFrame*)frame
+{
+    if (self.namespaceIndicator && self.namespaceManager.visualIndicatorsEnabled) {
+        [self.namespaceIndicator applyIndicatorToFrame:frame];
+    }
+}
+
+- (NSMenu*)createNamespaceStatusMenu
+{
+    if (self.namespaceManager) {
+        return [self.namespaceManager createNamespaceStatusMenu];
+    }
+    return nil;
+}
+
+#pragma mark - XNamespaceManagerDelegate Methods
+
+- (void)namespaceManager:(id)manager didDetectNamespace:(XNamespaceInfo *)namespace
+{
+    NSLog(@"XNamespace: Detected namespace %@ (%@)", namespace.namespaceId, namespace.namespaceName);
+}
+
+- (void)namespaceManager:(id)manager didChangeActiveNamespace:(XNamespaceInfo *)namespace
+{
+    NSLog(@"XNamespace: Active namespace changed to %@", namespace.namespaceId);
+    
+    // Refresh all window indicators to reflect the namespace change
+    if (self.namespaceIndicator) {
+        [self.namespaceIndicator refreshAllIndicators];
+    }
+}
+
+- (void)namespaceManager:(id)manager didAssignWindow:(xcb_window_t)windowId toNamespace:(XNamespaceInfo *)namespace
+{
+    NSLog(@"XNamespace: Window %u assigned to namespace %@", windowId, namespace.namespaceId);
+    
+    // Update the window's visual indicator
+    if (self.namespaceIndicator) {
+        [self.namespaceIndicator updateIndicatorForWindow:windowId];
+    }
+}
+
+- (void)namespaceManager:(id)manager didDetectSecurityViolation:(NSDictionary *)violationInfo
+{
+    NSLog(@"XNamespace: Security violation detected - %@", violationInfo);
+}
+
+- (void)namespaceManagerExtensionBecameAvailable:(id)manager
+{
+    NSLog(@"XNamespace: Extension became available on X server");
+}
+
+- (void)namespaceManagerExtensionNotAvailable:(id)manager
+{
+    NSLog(@"XNamespace: Extension not available, using compatibility mode");
+}
+
+#pragma mark - XNamespace Notification Handlers
+
+- (void)handleNamespaceChange:(NSNotification *)notification
+{
+    XNamespaceInfo *namespace = notification.userInfo[@"namespace"];
+    NSLog(@"Received namespace change notification: %@", namespace.namespaceId);
+    
+    // Refresh indicators for all windows
+    if (self.namespaceIndicator) {
+        [self.namespaceIndicator refreshAllIndicators];
+    }
+}
+
+- (void)handleNamespaceSecurityViolation:(NSNotification *)notification
+{
+    NSDictionary *violation = notification.userInfo;
+    NSLog(@"Received security violation notification: %@", violation);
+}
+
 #pragma mark - Cleanup
 
 - (void)dealloc
@@ -1206,6 +1374,11 @@
                                 forMode:NSDefaultRunLoopMode
                                    all:YES];
         }
+    }
+
+    // Cleanup XNamespace resources
+    if (self.namespaceManager) {
+        [self.namespaceManager cleanup];
     }
 
     // Remove notification center observers
