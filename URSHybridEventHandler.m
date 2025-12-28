@@ -299,14 +299,22 @@
         case XCB_MAP_REQUEST: {
             xcb_map_request_event_t *mapRequestEvent = (xcb_map_request_event_t *)event;
 
-            // Let XCBConnection handle the map request normally (this creates titlebar structure)
-            [connection handleMapRequest:mapRequestEvent];
+            // Check if this is a splash screen window
+            if ([self isSplashScreenWindow:mapRequestEvent->window]) {
+                // For splash screens, just map the window without decoration
+                NSLog(@"Mapping splash screen window %u without decoration", mapRequestEvent->window);
+                xcb_map_window([connection connection], mapRequestEvent->window);
+                // Don't call handleMapRequest which would decorate it
+            } else {
+                // Let XCBConnection handle the map request normally (this creates titlebar structure)
+                [connection handleMapRequest:mapRequestEvent];
 
-            // Hide borders for windows with fixed sizes (like info panels and logout)
-            [self adjustBorderForFixedSizeWindow:mapRequestEvent->window];
+                // Hide borders for windows with fixed sizes (like info panels and logout)
+                [self adjustBorderForFixedSizeWindow:mapRequestEvent->window];
 
-            // Apply GSTheme immediately with no delay
-            [self applyGSThemeToRecentlyMappedWindow:[NSNumber numberWithUnsignedInt:mapRequestEvent->window]];
+                // Apply GSTheme immediately with no delay
+                [self applyGSThemeToRecentlyMappedWindow:[NSNumber numberWithUnsignedInt:mapRequestEvent->window]];
+            }
             break;
         }
         case XCB_UNMAP_NOTIFY: {
@@ -616,6 +624,59 @@
         }
     } @catch (NSException *exception) {
         NSLog(@"Exception in titlebar expose handler: %@", exception.reason);
+    }
+}
+
+- (BOOL)isSplashScreenWindow:(xcb_window_t)windowId {
+    @try {
+        xcb_connection_t *conn = [connection connection];
+        
+        // Get the _NET_WM_WINDOW_TYPE atom
+        xcb_intern_atom_cookie_t type_atom_cookie = xcb_intern_atom(conn, 0, 19, "_NET_WM_WINDOW_TYPE");
+        xcb_intern_atom_reply_t *type_atom_reply = xcb_intern_atom_reply(conn, type_atom_cookie, NULL);
+        
+        if (!type_atom_reply) {
+            return NO;
+        }
+        
+        xcb_atom_t type_atom = type_atom_reply->atom;
+        free(type_atom_reply);
+        
+        // Get the window's type property
+        xcb_get_property_cookie_t prop_cookie = xcb_get_property(conn, 0, windowId, type_atom, XCB_ATOM_ATOM, 0, 32);
+        xcb_get_property_reply_t *prop_reply = xcb_get_property_reply(conn, prop_cookie, NULL);
+        
+        if (!prop_reply) {
+            return NO;
+        }
+        
+        if (prop_reply->type == XCB_ATOM_ATOM && prop_reply->format == 32 && prop_reply->value_len > 0) {
+            // Get the _NET_WM_WINDOW_TYPE_SPLASH atom
+            xcb_intern_atom_cookie_t splash_atom_cookie = xcb_intern_atom(conn, 0, 25, "_NET_WM_WINDOW_TYPE_SPLASH");
+            xcb_intern_atom_reply_t *splash_atom_reply = xcb_intern_atom_reply(conn, splash_atom_cookie, NULL);
+            
+            if (splash_atom_reply) {
+                xcb_atom_t splash_atom = splash_atom_reply->atom;
+                free(splash_atom_reply);
+                
+                // Check if any of the window types is SPLASH
+                xcb_atom_t *types = (xcb_atom_t *)xcb_get_property_value(prop_reply);
+                for (uint32_t i = 0; i < prop_reply->value_len; i++) {
+                    if (types[i] == splash_atom) {
+                        free(prop_reply);
+                        NSLog(@"Window %u is a splash screen, skipping decoration", windowId);
+                        return YES;
+                    }
+                }
+            }
+        }
+        
+        free(prop_reply);
+        return NO;
+        
+    } @catch (NSException *exception) {
+        NSLog(@"Exception checking if window is splash screen: %@", exception.reason);
+        return NO;
     }
 }
 

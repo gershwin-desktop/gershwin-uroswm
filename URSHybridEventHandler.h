@@ -33,6 +33,9 @@
 // Original URSEventHandler methods (preserved for compatibility)
 - (void)registerAsWindowManager;
 
+// Window type checking
+- (BOOL)isSplashScreenWindow:(xcb_window_t)windowId;
+
 // New NSRunLoop Integration methods
 - (void)setupXCBEventIntegration;
 - (void)processXCBEvent:(xcb_generic_event_t*)event;
