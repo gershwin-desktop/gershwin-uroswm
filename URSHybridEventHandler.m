@@ -299,7 +299,7 @@
         case XCB_MAP_REQUEST: {
             xcb_map_request_event_t *mapRequestEvent = (xcb_map_request_event_t *)event;
 
-            // Check if this window should skip decoration (splash, dock, motif hints, etc.)
+            // Check if this window should skip decoration
             if ([self shouldSkipDecorationForWindow:mapRequestEvent->window]) {
                 // For windows that shouldn't be decorated, just map them directly
                 NSLog(@"Mapping window %u without decoration", mapRequestEvent->window);
@@ -665,6 +665,7 @@
         if (motifReply) free(motifReply);
         
         // Check 2: _NET_WM_WINDOW_TYPE property
+        // Only skip decoration for truly transient/popup windows and splash screens
         xcb_get_property_reply_t *typeReply = (xcb_get_property_reply_t *)[ewmhService getProperty:ewmhService.EWMHWMWindowType
                                                                                         propertyType:XCB_ATOM_ATOM
                                                                                            forWindow:window
@@ -673,11 +674,9 @@
         
         if (typeReply && typeReply->type == XCB_ATOM_ATOM && typeReply->format == 32 && typeReply->value_len > 0) {
             // Get atoms for window types that should not be decorated
+            // NOTE: We exclude DOCK, MENU, TOOLBAR as these may need WM handling
             xcb_atom_t splashAtom = [atomService atomFromCachedAtomsWithKey:ewmhService.EWMHWMWindowTypeSplash];
             xcb_atom_t desktopAtom = [atomService atomFromCachedAtomsWithKey:ewmhService.EWMHWMWindowTypeDesktop];
-            xcb_atom_t dockAtom = [atomService atomFromCachedAtomsWithKey:ewmhService.EWMHWMWindowTypeDock];
-            xcb_atom_t toolbarAtom = [atomService atomFromCachedAtomsWithKey:ewmhService.EWMHWMWindowTypeToolbar];
-            xcb_atom_t menuAtom = [atomService atomFromCachedAtomsWithKey:ewmhService.EWMHWMWindowTypeMenu];
             xcb_atom_t dropdownMenuAtom = [atomService atomFromCachedAtomsWithKey:ewmhService.EWMHWMWindowTypeDropdownMenu];
             xcb_atom_t popupMenuAtom = [atomService atomFromCachedAtomsWithKey:ewmhService.EWMHWMWindowTypePopupMenu];
             xcb_atom_t tooltipAtom = [atomService atomFromCachedAtomsWithKey:ewmhService.EWMHWMWindowTypeTooltip];
@@ -694,12 +693,6 @@
                     typeName = "splash";
                 } else if (types[i] == desktopAtom) {
                     typeName = "desktop";
-                } else if (types[i] == dockAtom) {
-                    typeName = "dock";
-                } else if (types[i] == toolbarAtom) {
-                    typeName = "toolbar";
-                } else if (types[i] == menuAtom) {
-                    typeName = "menu";
                 } else if (types[i] == dropdownMenuAtom) {
                     typeName = "dropdown menu";
                 } else if (types[i] == popupMenuAtom) {
