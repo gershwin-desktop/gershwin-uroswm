@@ -26,10 +26,6 @@
 @synthesize nsRunLoopActive;
 @synthesize eventCount;
 
-// Cached atoms for window type checking
-static xcb_atom_t cached_net_wm_window_type = XCB_ATOM_NONE;
-static xcb_atom_t cached_net_wm_window_type_splash = XCB_ATOM_NONE;
-
 #pragma mark - Initialization
 
 - (id)init
@@ -633,51 +629,39 @@ static xcb_atom_t cached_net_wm_window_type_splash = XCB_ATOM_NONE;
 
 - (BOOL)isSplashScreenWindow:(xcb_window_t)windowId {
     @try {
-        xcb_connection_t *conn = [connection connection];
+        EWMHService *ewmhService = [EWMHService sharedInstanceWithConnection:connection];
         
-        // Cache atoms on first use for better performance
-        if (cached_net_wm_window_type == XCB_ATOM_NONE) {
-            const char *type_name = "_NET_WM_WINDOW_TYPE";
-            xcb_intern_atom_cookie_t cookie = xcb_intern_atom(conn, 0, strlen(type_name), type_name);
-            xcb_intern_atom_reply_t *reply = xcb_intern_atom_reply(conn, cookie, NULL);
-            if (reply) {
-                cached_net_wm_window_type = reply->atom;
-                free(reply);
-            }
+        // Get the XCBWindow object for this window ID
+        XCBWindow *window = [connection windowForXCBId:windowId];
+        if (!window) {
+            // Create a temporary window object to query properties
+            window = [[XCBWindow alloc] init];
+            [window setWindow:windowId];
+            [window setConnection:connection];
         }
         
-        if (cached_net_wm_window_type_splash == XCB_ATOM_NONE) {
-            const char *splash_name = "_NET_WM_WINDOW_TYPE_SPLASH";
-            xcb_intern_atom_cookie_t cookie = xcb_intern_atom(conn, 0, strlen(splash_name), splash_name);
-            xcb_intern_atom_reply_t *reply = xcb_intern_atom_reply(conn, cookie, NULL);
-            if (reply) {
-                cached_net_wm_window_type_splash = reply->atom;
-                free(reply);
-            }
-        }
+        // Get the _NET_WM_WINDOW_TYPE property using EWMHService
+        xcb_get_property_reply_t *reply = (xcb_get_property_reply_t *)[ewmhService getProperty:ewmhService.EWMHWMWindowType
+                                                                                    propertyType:XCB_ATOM_ATOM
+                                                                                       forWindow:window
+                                                                                          delete:NO
+                                                                                          length:32];
         
-        // If we couldn't get the atoms, can't check window type
-        if (cached_net_wm_window_type == XCB_ATOM_NONE || cached_net_wm_window_type_splash == XCB_ATOM_NONE) {
-            return NO;
-        }
-        
-        // Get the window's type property
-        xcb_get_property_cookie_t prop_cookie = xcb_get_property(conn, 0, windowId, 
-                                                                   cached_net_wm_window_type, 
-                                                                   XCB_ATOM_ATOM, 0, 32);
-        xcb_get_property_reply_t *prop_reply = xcb_get_property_reply(conn, prop_cookie, NULL);
-        
-        if (!prop_reply) {
+        if (!reply) {
             return NO;
         }
         
         BOOL isSplash = NO;
         
-        if (prop_reply->type == XCB_ATOM_ATOM && prop_reply->format == 32 && prop_reply->value_len > 0) {
+        if (reply->type == XCB_ATOM_ATOM && reply->format == 32 && reply->value_len > 0) {
+            // Get the atom for _NET_WM_WINDOW_TYPE_SPLASH
+            XCBAtomService *atomService = ewmhService.atomService;
+            xcb_atom_t splashAtom = [atomService atomFromCachedAtomsWithKey:ewmhService.EWMHWMWindowTypeSplash];
+            
             // Check if any of the window types is SPLASH
-            xcb_atom_t *types = (xcb_atom_t *)xcb_get_property_value(prop_reply);
-            for (uint32_t i = 0; i < prop_reply->value_len; i++) {
-                if (types[i] == cached_net_wm_window_type_splash) {
+            xcb_atom_t *types = (xcb_atom_t *)xcb_get_property_value(reply);
+            for (uint32_t i = 0; i < reply->value_len; i++) {
+                if (types[i] == splashAtom) {
                     isSplash = YES;
                     NSLog(@"Window %u is a splash screen, skipping decoration", windowId);
                     break;
@@ -685,7 +669,7 @@ static xcb_atom_t cached_net_wm_window_type_splash = XCB_ATOM_NONE;
             }
         }
         
-        free(prop_reply);
+        free(reply);
         return isSplash;
         
     } @catch (NSException *exception) {
