@@ -15,15 +15,21 @@
 #import <XCBKit/XCBWindow.h>
 #import <XCBKit/XCBTitleBar.h>
 #import "URSThemeIntegration.h"
+#import "XNamespaceManager.h"
+#import "XNamespaceVisualIndicator.h"
 
 // Use GNUstep's existing RunLoopEventType and RunLoopEvents protocol
 // (already defined in Foundation/NSRunLoop.h)
 
-@interface URSHybridEventHandler : NSObject <NSApplicationDelegate, RunLoopEvents>
+@interface URSHybridEventHandler : NSObject <NSApplicationDelegate, RunLoopEvents, XNamespaceManagerDelegate>
 
 // XCB Integration Properties (same as original URSEventHandler)
 @property (strong, nonatomic) XCBConnection* connection;
 @property (strong, nonatomic) XCBWindow* selectionManagerWindow;
+
+// XNamespace Integration Properties
+@property (strong, nonatomic) XNamespaceManager* namespaceManager;
+@property (strong, nonatomic) XNamespaceVisualIndicator* namespaceIndicator;
 
 // Phase 1 Validation Properties
 @property (assign, nonatomic) BOOL xcbEventsIntegrated;
@@ -41,6 +47,11 @@
 - (void)handleWindowCreated:(XCBTitleBar*)titlebar;
 - (void)handleWindowFocusChanged:(XCBTitleBar*)titlebar isActive:(BOOL)active;
 - (void)refreshAllManagedWindows;
+
+// XNamespace Integration methods
+- (void)initializeXNamespaceSupport;
+- (void)applyNamespaceIndicatorToFrame:(XCBFrame*)frame;
+- (NSMenu*)createNamespaceStatusMenu;
 
 
 @end
