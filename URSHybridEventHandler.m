@@ -26,6 +26,10 @@
 @synthesize nsRunLoopActive;
 @synthesize eventCount;
 
+// Cached atoms for window type checking
+static xcb_atom_t cached_net_wm_window_type = XCB_ATOM_NONE;
+static xcb_atom_t cached_net_wm_window_type_splash = XCB_ATOM_NONE;
+
 #pragma mark - Initialization
 
 - (id)init
@@ -631,48 +635,58 @@
     @try {
         xcb_connection_t *conn = [connection connection];
         
-        // Get the _NET_WM_WINDOW_TYPE atom
-        xcb_intern_atom_cookie_t type_atom_cookie = xcb_intern_atom(conn, 0, 19, "_NET_WM_WINDOW_TYPE");
-        xcb_intern_atom_reply_t *type_atom_reply = xcb_intern_atom_reply(conn, type_atom_cookie, NULL);
+        // Cache atoms on first use for better performance
+        if (cached_net_wm_window_type == XCB_ATOM_NONE) {
+            const char *type_name = "_NET_WM_WINDOW_TYPE";
+            xcb_intern_atom_cookie_t cookie = xcb_intern_atom(conn, 0, strlen(type_name), type_name);
+            xcb_intern_atom_reply_t *reply = xcb_intern_atom_reply(conn, cookie, NULL);
+            if (reply) {
+                cached_net_wm_window_type = reply->atom;
+                free(reply);
+            }
+        }
         
-        if (!type_atom_reply) {
+        if (cached_net_wm_window_type_splash == XCB_ATOM_NONE) {
+            const char *splash_name = "_NET_WM_WINDOW_TYPE_SPLASH";
+            xcb_intern_atom_cookie_t cookie = xcb_intern_atom(conn, 0, strlen(splash_name), splash_name);
+            xcb_intern_atom_reply_t *reply = xcb_intern_atom_reply(conn, cookie, NULL);
+            if (reply) {
+                cached_net_wm_window_type_splash = reply->atom;
+                free(reply);
+            }
+        }
+        
+        // If we couldn't get the atoms, can't check window type
+        if (cached_net_wm_window_type == XCB_ATOM_NONE || cached_net_wm_window_type_splash == XCB_ATOM_NONE) {
             return NO;
         }
         
-        xcb_atom_t type_atom = type_atom_reply->atom;
-        free(type_atom_reply);
-        
         // Get the window's type property
-        xcb_get_property_cookie_t prop_cookie = xcb_get_property(conn, 0, windowId, type_atom, XCB_ATOM_ATOM, 0, 32);
+        xcb_get_property_cookie_t prop_cookie = xcb_get_property(conn, 0, windowId, 
+                                                                   cached_net_wm_window_type, 
+                                                                   XCB_ATOM_ATOM, 0, 32);
         xcb_get_property_reply_t *prop_reply = xcb_get_property_reply(conn, prop_cookie, NULL);
         
         if (!prop_reply) {
             return NO;
         }
         
+        BOOL isSplash = NO;
+        
         if (prop_reply->type == XCB_ATOM_ATOM && prop_reply->format == 32 && prop_reply->value_len > 0) {
-            // Get the _NET_WM_WINDOW_TYPE_SPLASH atom
-            xcb_intern_atom_cookie_t splash_atom_cookie = xcb_intern_atom(conn, 0, 25, "_NET_WM_WINDOW_TYPE_SPLASH");
-            xcb_intern_atom_reply_t *splash_atom_reply = xcb_intern_atom_reply(conn, splash_atom_cookie, NULL);
-            
-            if (splash_atom_reply) {
-                xcb_atom_t splash_atom = splash_atom_reply->atom;
-                free(splash_atom_reply);
-                
-                // Check if any of the window types is SPLASH
-                xcb_atom_t *types = (xcb_atom_t *)xcb_get_property_value(prop_reply);
-                for (uint32_t i = 0; i < prop_reply->value_len; i++) {
-                    if (types[i] == splash_atom) {
-                        free(prop_reply);
-                        NSLog(@"Window %u is a splash screen, skipping decoration", windowId);
-                        return YES;
-                    }
+            // Check if any of the window types is SPLASH
+            xcb_atom_t *types = (xcb_atom_t *)xcb_get_property_value(prop_reply);
+            for (uint32_t i = 0; i < prop_reply->value_len; i++) {
+                if (types[i] == cached_net_wm_window_type_splash) {
+                    isSplash = YES;
+                    NSLog(@"Window %u is a splash screen, skipping decoration", windowId);
+                    break;
                 }
             }
         }
         
         free(prop_reply);
-        return NO;
+        return isSplash;
         
     } @catch (NSException *exception) {
         NSLog(@"Exception checking if window is splash screen: %@", exception.reason);
