@@ -9,6 +9,8 @@
 #import <xcb/xcb.h>
 #import <xcb/xcb_icccm.h>
 #import <xcb/xproto.h>
+#import <stdlib.h>
+#import <string.h>
 
 // Constants
 NSString * const TitleBar = @"TitleBar";
@@ -455,9 +457,134 @@ static XCBConnection *sharedConnection = nil;
     // This is a critical WM function - a client wants to map a window
     NSLog(@"Map request for window %u", event->window);
     
-    // For minimal implementation, just map the window
-    // A full WM would create decorations here
+    // Get window geometry
+    xcb_get_geometry_cookie_t geom_cookie = xcb_get_geometry(self.connection, event->window);
+    xcb_get_geometry_reply_t *geom_reply = xcb_get_geometry_reply(self.connection, geom_cookie, NULL);
+    
+    if (!geom_reply) {
+        // If we can't get geometry, just map it
+        xcb_map_window(self.connection, event->window);
+        return;
+    }
+    
+    // Check if this window should be managed (has WM_TRANSIENT_FOR = unmanaged)
+    xcb_get_property_cookie_t trans_cookie = xcb_icccm_get_wm_transient_for(self.connection, event->window);
+    xcb_window_t transient_for = XCB_NONE;
+    BOOL is_transient = (xcb_icccm_get_wm_transient_for_reply(self.connection, trans_cookie, &transient_for, NULL) == 1);
+    
+    if (is_transient) {
+        // Transient windows (dialogs, etc.) don't get frames
+        NSLog(@"Window %u is transient, mapping without frame", event->window);
+        xcb_map_window(self.connection, event->window);
+        free(geom_reply);
+        return;
+    }
+    
+    // Create or get client window object
+    XCBWindow *clientWindow = [self windowForXCBId:event->window];
+    if (!clientWindow) {
+        clientWindow = [[XCBWindow alloc] init];
+        [clientWindow setWindow:event->window];
+        [clientWindow setConnection:self];
+        [self registerWindow:clientWindow];
+    }
+    
+    // Create frame for the window
+    XCBFrame *frame = [[XCBFrame alloc] initWithClientWindow:clientWindow withConnection:self];
+    
+    // Get screen info for creating frame and titlebar
+    XCBScreen *screen = [self.screens objectAtIndex:0];
+    
+    // Calculate frame geometry (client + titlebar + borders)
+    TitleBarSettingsService *tbSettings = [TitleBarSettingsService sharedInstance];
+    int titlebarHeight = tbSettings.height;
+    int borderWidth = 1;
+    
+    int frameX = geom_reply->x;
+    int frameY = geom_reply->y - titlebarHeight;
+    int frameWidth = geom_reply->width + (borderWidth * 2);
+    int frameHeight = geom_reply->height + titlebarHeight + (borderWidth * 2);
+    
+    // Create frame window
+    uint32_t frame_mask = XCB_CW_BACK_PIXEL | XCB_CW_EVENT_MASK;
+    uint32_t frame_values[2];
+    frame_values[0] = screen.screen->white_pixel;
+    frame_values[1] = XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT |
+                      XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY |
+                      XCB_EVENT_MASK_BUTTON_PRESS |
+                      XCB_EVENT_MASK_BUTTON_RELEASE |
+                      XCB_EVENT_MASK_POINTER_MOTION |
+                      XCB_EVENT_MASK_EXPOSURE;
+    
+    xcb_create_window(self.connection,
+                     XCB_COPY_FROM_PARENT,
+                     frame.window,
+                     screen.screen->root,
+                     frameX, frameY,
+                     frameWidth, frameHeight,
+                     borderWidth,
+                     XCB_WINDOW_CLASS_INPUT_OUTPUT,
+                     screen.screen->root_visual,
+                     frame_mask,
+                     frame_values);
+    
+    [self registerWindow:frame];
+    frame.windowRect = NSMakeRect(frameX, frameY, frameWidth, frameHeight);
+    
+    // Create titlebar window
+    XCBTitleBar *titlebar = [[XCBTitleBar alloc] init];
+    titlebar.window = xcb_generate_id(self.connection);
+    titlebar.connection = self;
+    titlebar.frame = NSMakeRect(0, 0, frameWidth, titlebarHeight);
+    
+    uint32_t tb_mask = XCB_CW_BACK_PIXEL | XCB_CW_EVENT_MASK;
+    uint32_t tb_values[2];
+    tb_values[0] = screen.screen->white_pixel;
+    tb_values[1] = XCB_EVENT_MASK_EXPOSURE |
+                   XCB_EVENT_MASK_BUTTON_PRESS |
+                   XCB_EVENT_MASK_BUTTON_RELEASE |
+                   XCB_EVENT_MASK_POINTER_MOTION;
+    
+    xcb_create_window(self.connection,
+                     XCB_COPY_FROM_PARENT,
+                     titlebar.window,
+                     frame.window,
+                     0, 0,
+                     frameWidth, titlebarHeight,
+                     0,
+                     XCB_WINDOW_CLASS_INPUT_OUTPUT,
+                     screen.screen->root_visual,
+                     tb_mask,
+                     tb_values);
+    
+    // Create pixmap for titlebar
+    titlebar.pixmap = xcb_generate_id(self.connection);
+    xcb_create_pixmap(self.connection, 24, titlebar.pixmap, titlebar.window, frameWidth, titlebarHeight);
+    
+    // Setup visual
+    XCBVisual *visual = [[XCBVisual alloc] initWithVisualId:screen.screen->root_visual];
+    [visual setVisualTypeForScreen:screen];
+    titlebar.visual = visual;
+    
+    [self registerWindow:titlebar];
+    [frame setChildWindow:titlebar forKey:TitleBar];
+    [frame setChildWindow:clientWindow forKey:ClientWindow];
+    titlebar.parentWindow = frame;
+    clientWindow.parentWindow = frame;
+    
+    // Reparent client window into frame
+    xcb_reparent_window(self.connection,
+                       event->window,
+                       frame.window,
+                       borderWidth,
+                       titlebarHeight);
+    
+    // Map frame, titlebar, and client
+    xcb_map_window(self.connection, titlebar.window);
     xcb_map_window(self.connection, event->window);
+    xcb_map_window(self.connection, frame.window);
+    
+    free(geom_reply);
 }
 
 - (void)handleUnMapNotify:(xcb_unmap_notify_event_t*)event {
@@ -514,6 +641,11 @@ static XCBConnection *sharedConnection = nil;
     xcb_configure_window(self.connection, event->window, mask, values);
 }
 
+- (void)handleConfigureWindowRequest:(xcb_configure_request_event_t*)event {
+    // Alias for handleConfigureRequest
+    [self handleConfigureRequest:event];
+}
+
 - (void)handleConfigureNotify:(xcb_configure_notify_event_t*)event {
     // Minimal implementation
     // NSLog(@"Configure notify for window %u", event->window);
@@ -522,6 +654,11 @@ static XCBConnection *sharedConnection = nil;
 - (void)handlePropertyNotify:(xcb_property_notify_event_t*)event {
     // Minimal implementation
     // NSLog(@"Property notify for window %u", event->window);
+}
+
+- (void)handleClientMessage:(xcb_client_message_event_t*)event {
+    // Minimal implementation for client messages (like _NET_WM_STATE)
+    NSLog(@"Client message for window %u", event->window);
 }
 
 - (void)dealloc {

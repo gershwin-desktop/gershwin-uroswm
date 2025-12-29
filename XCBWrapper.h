@@ -72,6 +72,7 @@ static inline XCBPoint XCBMakePoint(double x, double y) {
 @property (assign, nonatomic) xcb_window_t window;
 @property (strong, nonatomic) XCBConnection *connection;
 @property (strong, nonatomic) NSString *windowTitle;
+@property (strong, nonatomic) XCBWindow *parentWindow;
 
 - (instancetype)init;
 - (void)setWindow:(xcb_window_t)window;
@@ -194,8 +195,10 @@ static inline XCBPoint XCBMakePoint(double x, double y) {
 - (void)handleUnMapNotify:(xcb_unmap_notify_event_t*)event;
 - (void)handleDestroyNotify:(xcb_destroy_notify_event_t*)event;
 - (void)handleConfigureRequest:(xcb_configure_request_event_t*)event;
+- (void)handleConfigureWindowRequest:(xcb_configure_request_event_t*)event;
 - (void)handleConfigureNotify:(xcb_configure_notify_event_t*)event;
 - (void)handlePropertyNotify:(xcb_property_notify_event_t*)event;
+- (void)handleClientMessage:(xcb_client_message_event_t*)event;
 
 // Utility function to copy NSBitmapImageRep data to XCB pixmap
 // This replaces Cairo functionality with direct XCB operations
