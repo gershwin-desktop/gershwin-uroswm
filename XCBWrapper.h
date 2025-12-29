@@ -89,6 +89,8 @@ static inline XCBRect XCBMakeRect(XCBPoint origin, XCBSize size) {
 
 - (instancetype)initWithScreen:(xcb_screen_t*)screen number:(int)number;
 - (XCBWindow*)rootWindow;
+- (uint16_t)width;
+- (uint16_t)height;
 
 @end
 
@@ -106,6 +108,7 @@ static inline XCBRect XCBMakeRect(XCBPoint origin, XCBSize size) {
 - (void)setWindow:(xcb_window_t)window;
 - (void)setConnection:(XCBConnection*)connection;
 - (XCBRect)windowRect;
+- (void)close;
 
 @end
 
@@ -142,6 +145,7 @@ static inline XCBRect XCBMakeRect(XCBPoint origin, XCBSize size) {
 - (void)setChildWindow:(XCBWindow*)childWindow forKey:(NSString*)key;
 - (BOOL)isMaximized;
 - (void)minimize;
+- (void)maximizeToSize:(XCBSize)size andPosition:(XCBPoint)position;
 - (BOOL)onScreen;
 - (void)restoreDimensionAndPosition;
 

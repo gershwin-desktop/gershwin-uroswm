@@ -70,6 +70,14 @@ NSString * const ClientWindow = @"ClientWindow";
     return window;
 }
 
+- (uint16_t)width {
+    return self.screen ? self.screen->width_in_pixels : 0;
+}
+
+- (uint16_t)height {
+    return self.screen ? self.screen->height_in_pixels : 0;
+}
+
 @end
 
 #pragma mark - XCBWindow Implementation
@@ -96,6 +104,46 @@ NSString * const ClientWindow = @"ClientWindow";
 
 - (XCBRect)windowRect {
     return _windowRect;
+}
+
+- (void)close {
+    // Send WM_DELETE_WINDOW message to the client
+    if (self.window != XCB_NONE && self.connection) {
+        // Try to get the WM_DELETE_WINDOW atom
+        xcb_intern_atom_cookie_t cookie = xcb_intern_atom([self.connection connection], 0, 16, "WM_DELETE_WINDOW");
+        xcb_intern_atom_reply_t *reply = xcb_intern_atom_reply([self.connection connection], cookie, NULL);
+        
+        if (reply) {
+            xcb_atom_t wm_delete = reply->atom;
+            free(reply);
+            
+            xcb_intern_atom_cookie_t proto_cookie = xcb_intern_atom([self.connection connection], 0, 12, "WM_PROTOCOLS");
+            xcb_intern_atom_reply_t *proto_reply = xcb_intern_atom_reply([self.connection connection], proto_cookie, NULL);
+            
+            if (proto_reply) {
+                xcb_atom_t wm_protocols = proto_reply->atom;
+                free(proto_reply);
+                
+                // Send client message
+                xcb_client_message_event_t event;
+                memset(&event, 0, sizeof(event));
+                event.response_type = XCB_CLIENT_MESSAGE;
+                event.window = self.window;
+                event.type = wm_protocols;
+                event.format = 32;
+                event.data.data32[0] = wm_delete;
+                event.data.data32[1] = XCB_CURRENT_TIME;
+                
+                xcb_send_event([self.connection connection], 0, self.window,
+                              XCB_EVENT_MASK_NO_EVENT, (const char*)&event);
+                
+                NSLog(@"XCBWindow: Sent WM_DELETE_WINDOW to window %u", self.window);
+            }
+        }
+        
+        // Fallback: destroy the window
+        // xcb_destroy_window([self.connection connection], self.window);
+    }
 }
 
 @end
@@ -199,6 +247,33 @@ NSString * const ClientWindow = @"ClientWindow";
         xcb_unmap_window([self.connection connection], self.window);
         [self.connection flush];
         NSLog(@"XCBFrame: Minimized window %u", self.window);
+    }
+}
+
+- (void)maximizeToSize:(XCBSize)size andPosition:(XCBPoint)position {
+    // Maximize window to given size and position
+    if (self.window != XCB_NONE && self.connection) {
+        // Save current position before maximizing
+        if (!_maximized) {
+            _savedRect = self.windowRect;
+        }
+        
+        uint32_t values[4];
+        values[0] = (uint32_t)position.x;
+        values[1] = (uint32_t)position.y;
+        values[2] = (uint32_t)size.width;
+        values[3] = (uint32_t)size.height;
+        
+        xcb_configure_window([self.connection connection],
+                           self.window,
+                           XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y |
+                           XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT,
+                           values);
+        
+        self.windowRect = NSMakeRect(position.x, position.y, size.width, size.height);
+        _maximized = YES;
+        [self.connection flush];
+        NSLog(@"XCBFrame: Maximized window %u", self.window);
     }
 }
 
