@@ -6,10 +6,7 @@
 //
 
 #import "URSThemeIntegration.h"
-#import <XCBKit/XCBConnection.h>
-#import <XCBKit/XCBFrame.h>
-#import <cairo/cairo.h>
-#import <cairo/cairo-xcb.h>
+#import "XCBWrapper.h"
 #import <objc/runtime.h>
 #import "GSThemeTitleBar.h"
 
@@ -437,126 +434,40 @@ static NSMutableSet *fixedSizeWindows = nil;
         }
     }
 
-    // Create Cairo surface from XCB titlebar pixmap
-    cairo_surface_t *x11Surface = cairo_xcb_surface_create(
-        [titlebar.connection connection],
-        titlebar.pixmap,
-        titlebar.visual.visualType,
-        (int)image.size.width,
-        (int)image.size.height
-    );
-
-    cairo_status_t surface_status = cairo_surface_status(x11Surface);
-    if (surface_status != CAIRO_STATUS_SUCCESS) {
-        NSLog(@"Failed to create Cairo X11 surface for titlebar: %s", cairo_status_to_string(surface_status));
-        cairo_surface_destroy(x11Surface);
+    // Use direct XCB pixmap operations instead of Cairo
+    NSLog(@"Copying GSTheme image to titlebar pixmap using XCB...");
+    
+    BOOL success = [XCBConnection copyBitmapToPixmap:bitmap
+                                            toPixmap:titlebar.pixmap
+                                          connection:[titlebar.connection connection]
+                                              window:titlebar.window
+                                              visual:titlebar.visual.visualType];
+    
+    if (!success) {
+        NSLog(@"Failed to copy bitmap to titlebar pixmap");
         return NO;
     }
-
-    NSLog(@"Cairo X11 surface created successfully");
-
-    cairo_t *ctx = cairo_create(x11Surface);
-
-    // Create Cairo image surface from bitmap data
-    // NOTE: NSBitmapImageRep uses RGBA but Cairo ARGB32 expects BGRA, so we need to convert
-    unsigned char *bitmapPixels = [bitmap bitmapData];
-    int width = [bitmap pixelsWide];
-    int height = [bitmap pixelsHigh];
-    int bytesPerRow = [bitmap bytesPerRow];
-
-    // Convert RGBA to BGRA for Cairo
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            int offset = (y * bytesPerRow) + (x * 4);
-            unsigned char r = bitmapPixels[offset];
-            unsigned char g = bitmapPixels[offset + 1];
-            unsigned char b = bitmapPixels[offset + 2];
-            unsigned char a = bitmapPixels[offset + 3];
-
-            // Swap R and B for BGRA format expected by Cairo
-            bitmapPixels[offset] = b;     // Blue
-            bitmapPixels[offset + 1] = g; // Green (unchanged)
-            bitmapPixels[offset + 2] = r; // Red
-            bitmapPixels[offset + 3] = a; // Alpha (unchanged)
-        }
-    }
-
-    cairo_surface_t *imageSurface = cairo_image_surface_create_for_data(
-        bitmapPixels,
-        CAIRO_FORMAT_ARGB32,
-        width,
-        height,
-        bytesPerRow
-    );
-
-    if (cairo_surface_status(imageSurface) != CAIRO_STATUS_SUCCESS) {
-        NSLog(@"Failed to create Cairo image surface for titlebar transfer");
-        cairo_surface_destroy(imageSurface);
-        cairo_destroy(ctx);
-        cairo_surface_destroy(x11Surface);
-        return NO;
-    }
-
-    NSLog(@"Painting GSTheme image to X11 surface...");
-
-    // Paint GSTheme image to X11 surface using SOURCE operator
-    // SOURCE completely replaces destination pixels (no compositing)
-    // This prevents old pixmap garbage from showing through
-    cairo_set_operator(ctx, CAIRO_OPERATOR_SOURCE);
-    cairo_set_source_surface(ctx, imageSurface, 0, 0);
-    cairo_paint(ctx);
-    cairo_surface_flush(x11Surface);
-
+    
     // Force immediate X11 update to ensure GSTheme is visible
     [titlebar.connection flush];
     xcb_flush([titlebar.connection connection]);
-
-    NSLog(@"GSTheme image painted and surface flushed");
-
-    // Cleanup first surface
-    cairo_surface_destroy(imageSurface);
-    cairo_destroy(ctx);
-    cairo_surface_destroy(x11Surface);
+    
+    NSLog(@"GSTheme image copied to pixmap successfully");
 
     // ALSO paint to dPixmap (inactive pixmap) so unfocused windows don't show black
-    // XCBWindow.drawArea uses isAbove ? pixmap : dPixmap, so both need content
     xcb_pixmap_t dPixmap = [titlebar dPixmap];
     if (dPixmap != 0) {
-        NSLog(@"Also painting GSTheme to dPixmap (inactive pixmap): %u", dPixmap);
-
-        cairo_surface_t *dSurface = cairo_xcb_surface_create(
-            [titlebar.connection connection],
-            dPixmap,
-            titlebar.visual.visualType,
-            (int)image.size.width,
-            (int)image.size.height
-        );
-
-        if (cairo_surface_status(dSurface) == CAIRO_STATUS_SUCCESS) {
-            cairo_t *dCtx = cairo_create(dSurface);
-
-            // Recreate image surface (we need to redo RGBA->BGRA conversion)
-            // Note: bitmapPixels was already converted above, so we can reuse it
-            cairo_surface_t *dImageSurface = cairo_image_surface_create_for_data(
-                bitmapPixels,
-                CAIRO_FORMAT_ARGB32,
-                width,
-                height,
-                bytesPerRow
-            );
-
-            if (cairo_surface_status(dImageSurface) == CAIRO_STATUS_SUCCESS) {
-                cairo_set_operator(dCtx, CAIRO_OPERATOR_SOURCE);
-                cairo_set_source_surface(dCtx, dImageSurface, 0, 0);
-                cairo_paint(dCtx);
-                cairo_surface_flush(dSurface);
-                NSLog(@"GSTheme also painted to dPixmap successfully");
-            }
-
-            cairo_surface_destroy(dImageSurface);
-            cairo_destroy(dCtx);
+        NSLog(@"Also copying GSTheme to dPixmap (inactive pixmap): %u", dPixmap);
+        
+        BOOL dSuccess = [XCBConnection copyBitmapToPixmap:bitmap
+                                                 toPixmap:dPixmap
+                                               connection:[titlebar.connection connection]
+                                                   window:titlebar.window
+                                                   visual:titlebar.visual.visualType];
+        
+        if (dSuccess) {
+            NSLog(@"GSTheme also copied to dPixmap successfully");
         }
-        cairo_surface_destroy(dSurface);
     }
 
     [titlebar.connection flush];

@@ -9,9 +9,7 @@
 #import <Foundation/Foundation.h>
 #import <AppKit/AppKit.h>
 #import <GNUstepGUI/GSTheme.h>
-#import <XCBKit/XCBWindow.h>
-#import <XCBKit/XCBConnection.h>
-#import <XCBKit/XCBFrame.h>
+#import "XCBWrapper.h"
 
 @interface UROSTitleBar : NSObject
 

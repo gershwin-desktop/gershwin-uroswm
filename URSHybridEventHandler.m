@@ -10,11 +10,9 @@
 //
 
 #import "URSHybridEventHandler.h"
-#import <XCBKit/XCBScreen.h>
+#import "XCBWrapper.h"
 #import <xcb/xcb.h>
 #import <xcb/xcb_icccm.h>
-#import <XCBKit/services/EWMHService.h>
-#import <XCBKit/XCBFrame.h>
 #import "URSThemeIntegration.h"
 #import "GSThemeTitleBar.h"
 

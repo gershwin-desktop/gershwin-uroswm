@@ -6,29 +6,27 @@ include $(GNUSTEP_MAKEFILES)/common.make
 
 VERSION = 0.1.0
 
-DEPENDENCIES = XCBKit
-
 APP_NAME = WindowManager
 $(APP_NAME)_APPLICATION_ICON = WindowManager.png
 $(APP_NAME)_RESOURCE_FILES = WindowManager.png
 export APP_NAME
-
-$(APP_NAME)_LD_FLAGS += -L./XCBKit/XCBKit.framework/
 
 $(APP_NAME)_OBJC_FILES = \
 		main.m \
 		URSHybridEventHandler.m \
 		UROSWMApplication.m \
 		URSThemeIntegration.m \
-		GSThemeTitleBar.m
+		GSThemeTitleBar.m \
+		XCBWrapper.m
 
 $(APP_NAME)_HEADER_FILES = \
 		URSHybridEventHandler.h \
 		UROSWMApplication.h \
 		URSThemeIntegration.h \
-		GSThemeTitleBar.h
+		GSThemeTitleBar.h \
+		XCBWrapper.h
 
-$(APP_NAME)_GUI_LIBS = -lXCBKit -lxcb -lxcb-icccm $(shell pkg-config --libs cairo xcb)
+$(APP_NAME)_GUI_LIBS = -lxcb -lxcb-icccm $(shell pkg-config --libs xcb)
 
 ADDITIONAL_OBJCFLAGS = -std=c99 -g -O0 -fobjc-arc -Wall -Wno-typedef-redefinition #-Wno-unused -Werror -Wall
 

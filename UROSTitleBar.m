@@ -7,8 +7,6 @@
 //
 
 #import "UROSTitleBar.h"
-#import <cairo/cairo.h>
-#import <cairo/cairo-xcb.h>
 #import <xcb/xcb.h>
 
 @implementation UROSTitleBar
@@ -150,50 +148,17 @@
         return;
     }
 
-    // Create Cairo surface for pixmap
-    cairo_surface_t *pixmapSurface = cairo_xcb_surface_create(
-        [self.connection connection],
-        self.pixmap,
-        [self.visual visualType],
-        (int)self.frame.size.width,
-        (int)self.frame.size.height
-    );
-
-    if (cairo_surface_status(pixmapSurface) != CAIRO_STATUS_SUCCESS) {
-        NSLog(@"UROSTitleBar: Failed to create Cairo pixmap surface");
-        cairo_surface_destroy(pixmapSurface);
+    // Use direct XCB pixmap operations instead of Cairo
+    BOOL success = [XCBConnection copyBitmapToPixmap:bitmap
+                                            toPixmap:self.pixmap
+                                          connection:[self.connection connection]
+                                              window:self.windowId
+                                              visual:[self.visual visualType]];
+    
+    if (!success) {
+        NSLog(@"UROSTitleBar: Failed to copy bitmap to pixmap");
         return;
     }
-
-    cairo_t *ctx = cairo_create(pixmapSurface);
-
-    // Create Cairo image surface from bitmap
-    cairo_surface_t *imageSurface = cairo_image_surface_create_for_data(
-        [bitmap bitmapData],
-        CAIRO_FORMAT_ARGB32,
-        [bitmap pixelsWide],
-        [bitmap pixelsHigh],
-        [bitmap bytesPerRow]
-    );
-
-    if (cairo_surface_status(imageSurface) != CAIRO_STATUS_SUCCESS) {
-        NSLog(@"UROSTitleBar: Failed to create Cairo image surface");
-        cairo_surface_destroy(imageSurface);
-        cairo_destroy(ctx);
-        cairo_surface_destroy(pixmapSurface);
-        return;
-    }
-
-    // Paint image to pixmap
-    cairo_set_operator(ctx, CAIRO_OPERATOR_OVER);
-    cairo_set_source_surface(ctx, imageSurface, 0, 0);
-    cairo_paint(ctx);
-    cairo_surface_flush(pixmapSurface);
-
-    // Cleanup
-    cairo_surface_destroy(imageSurface);
-    cairo_destroy(ctx);
-    cairo_surface_destroy(pixmapSurface);
 }
 
 - (void)copyPixmapToWindow {

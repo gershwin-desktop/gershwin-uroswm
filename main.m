@@ -13,8 +13,7 @@
 #import "URSHybridEventHandler.h"
 #import "UROSWMApplication.h"
 #import "URSThemeIntegration.h"
-#import <XCBKit/utils/XCBShape.h>
-#import <XCBKit/services/TitleBarSettingsService.h>
+#import "XCBWrapper.h"
 
 int main(int argc, const char * argv[])
 {

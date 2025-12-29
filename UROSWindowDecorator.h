@@ -7,7 +7,7 @@
 //
 
 #import <Foundation/Foundation.h>
-#import <XCBKit/XCBConnection.h>
+#import "XCBWrapper.h"
 #import "UROSTitleBar.h"
 
 @interface UROSWindowDecorator : NSObject

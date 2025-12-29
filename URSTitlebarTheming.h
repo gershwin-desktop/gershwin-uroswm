@@ -7,7 +7,7 @@
 
 #import <Foundation/Foundation.h>
 #import <AppKit/AppKit.h>
-#import <XCBKit/XCBTitleBar.h>
+#import "XCBWrapper.h"
 
 @interface URSTitlebarTheming : NSObject
 

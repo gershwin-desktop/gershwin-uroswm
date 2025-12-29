@@ -9,9 +9,7 @@
 #import <AppKit/AppKit.h>
 #import <GNUstepGUI/GSTheme.h>
 #import <xcb/xcb.h>
-#import <XCBKit/XCBTitleBar.h>
-#import <XCBKit/XCBFrame.h>
-#import <XCBKit/enums/ETitleBarColor.h>
+#import "XCBWrapper.h"
 
 @interface URSThemeIntegration : NSObject
 

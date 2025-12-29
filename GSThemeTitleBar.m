@@ -7,8 +7,6 @@
 //
 
 #import "GSThemeTitleBar.h"
-#import <cairo/cairo.h>
-#import <cairo/cairo-xcb.h>
 
 @implementation GSThemeTitleBar
 
@@ -185,52 +183,17 @@
         return;
     }
 
-    // Create Cairo surface from titlebar pixmap
-    cairo_surface_t *x11Surface = cairo_xcb_surface_create(
-        [[self connection] connection],
-        [self pixmap],
-        [[self visual] visualType],
-        (int)image.size.width,
-        (int)image.size.height
-    );
-
-    if (cairo_surface_status(x11Surface) != CAIRO_STATUS_SUCCESS) {
-        NSLog(@"GSThemeTitleBar: Failed to create Cairo X11 surface");
-        cairo_surface_destroy(x11Surface);
+    // Use direct XCB pixmap operations instead of Cairo
+    BOOL success = [XCBConnection copyBitmapToPixmap:bitmap
+                                            toPixmap:[self pixmap]
+                                          connection:[[self connection] connection]
+                                              window:self.window
+                                              visual:[[self visual] visualType]];
+    
+    if (!success) {
+        NSLog(@"GSThemeTitleBar: Failed to copy bitmap to pixmap");
         return;
     }
-
-    cairo_t *ctx = cairo_create(x11Surface);
-
-    // Create Cairo image surface from bitmap data
-    cairo_surface_t *imageSurface = cairo_image_surface_create_for_data(
-        [bitmap bitmapData],
-        CAIRO_FORMAT_ARGB32,
-        [bitmap pixelsWide],
-        [bitmap pixelsHigh],
-        [bitmap bytesPerRow]
-    );
-
-    if (cairo_surface_status(imageSurface) != CAIRO_STATUS_SUCCESS) {
-        NSLog(@"GSThemeTitleBar: Failed to create Cairo image surface");
-        cairo_surface_destroy(imageSurface);
-        cairo_destroy(ctx);
-        cairo_surface_destroy(x11Surface);
-        return;
-    }
-
-    // Clear and paint GSTheme image to X11 surface
-    cairo_set_operator(ctx, CAIRO_OPERATOR_CLEAR);
-    cairo_paint(ctx);
-    cairo_set_operator(ctx, CAIRO_OPERATOR_OVER);
-    cairo_set_source_surface(ctx, imageSurface, 0, 0);
-    cairo_paint(ctx);
-    cairo_surface_flush(x11Surface);
-
-    // Cleanup
-    cairo_surface_destroy(imageSurface);
-    cairo_destroy(ctx);
-    cairo_surface_destroy(x11Surface);
 
     // Flush connection
     [[self connection] flush];

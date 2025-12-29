@@ -9,7 +9,7 @@
 #import <Foundation/Foundation.h>
 #import <AppKit/AppKit.h>
 #import <GNUstepGUI/GSTheme.h>
-#import <XCBKit/XCBTitleBar.h>
+#import "XCBWrapper.h"
 
 // Button types for hit detection
 typedef NS_ENUM(NSInteger, GSThemeTitleBarButton) {
@@ -17,6 +17,12 @@ typedef NS_ENUM(NSInteger, GSThemeTitleBarButton) {
     GSThemeTitleBarButtonMiniaturize,
     GSThemeTitleBarButtonClose,
     GSThemeTitleBarButtonZoom
+};
+
+// TitleBarColor enum (from old XCBKit)
+typedef NS_ENUM(NSInteger, TitleBarColor) {
+    TitleBarDownColor = 0,
+    TitleBarUpColor = 1
 };
 
 @interface GSThemeTitleBar : XCBTitleBar

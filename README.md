@@ -1,18 +1,16 @@
 Version: 0.1.0
 
-uroswm is a window manager written in objective-c and using the XCBKit framework
+uroswm is a window manager written in Objective-C using GNUstep and direct XCB calls
 
 ========================================================================================
 
 INSTALL
 
-To install urosw, you need XCBKit installed on your system.
+To install uroswm, you need the following dependencies installed on your system.
 
 DEPENDENCIES
 
-XCBKit: libxcb, xcb-fixes, libcairo, xcb-icccm, gnustep-base
-
-uroswm: XCBKit
+uroswm: libxcb, xcb-icccm, gnustep-base, gnustep-gui
 
 =======================================================================================
 

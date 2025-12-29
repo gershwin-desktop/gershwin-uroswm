@@ -11,9 +11,7 @@
 
 #import <AppKit/AppKit.h>
 #import <Foundation/Foundation.h>
-#import <XCBKit/XCBConnection.h>
-#import <XCBKit/XCBWindow.h>
-#import <XCBKit/XCBTitleBar.h>
+#import "XCBWrapper.h"
 #import "URSThemeIntegration.h"
 
 // Use GNUstep's existing RunLoopEventType and RunLoopEvents protocol
