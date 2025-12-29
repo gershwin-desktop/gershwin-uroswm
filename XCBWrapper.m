@@ -81,6 +81,7 @@ NSString * const ClientWindow = @"ClientWindow";
     if (self) {
         _window = XCB_NONE;
         _windowTitle = @"";
+        _windowRect = XCBMakeRect(XCBMakePoint(0, 0), XCBMakeSize(0, 0));
     }
     return self;
 }
@@ -91,6 +92,10 @@ NSString * const ClientWindow = @"ClientWindow";
 
 - (void)setConnection:(XCBConnection*)connection {
     _connection = connection;
+}
+
+- (XCBRect)windowRect {
+    return _windowRect;
 }
 
 @end
@@ -122,6 +127,35 @@ NSString * const ClientWindow = @"ClientWindow";
     return _dPixmap;
 }
 
+- (void)createPixmap {
+    if (_pixmap != XCB_NONE || !self.connection) {
+        return; // Already created or no connection
+    }
+    
+    NSSize size = self.frame.size;
+    if (size.width <= 0 || size.height <= 0) {
+        NSLog(@"XCBTitleBar: Invalid frame size for pixmap creation");
+        return;
+    }
+    
+    _pixmap = xcb_generate_id([self.connection connection]);
+    xcb_create_pixmap([self.connection connection],
+                     24, // depth
+                     _pixmap,
+                     self.window,
+                     (uint16_t)size.width,
+                     (uint16_t)size.height);
+    
+    // Also create dPixmap (inactive pixmap)
+    _dPixmap = xcb_generate_id([self.connection connection]);
+    xcb_create_pixmap([self.connection connection],
+                     24, // depth
+                     _dPixmap,
+                     self.window,
+                     (uint16_t)size.width,
+                     (uint16_t)size.height);
+}
+
 @end
 
 #pragma mark - XCBFrame Implementation
@@ -136,6 +170,8 @@ NSString * const ClientWindow = @"ClientWindow";
         self.connection = connection;
         _childWindows = [[NSMutableDictionary alloc] init];
         _windowRect = NSZeroRect;
+        _maximized = NO;
+        _savedRect = NSZeroRect;
         
         // Generate frame window ID
         self.window = xcb_generate_id(connection.connection);
@@ -150,6 +186,46 @@ NSString * const ClientWindow = @"ClientWindow";
 - (void)setChildWindow:(XCBWindow*)childWindow forKey:(NSString*)key {
     if (childWindow && key) {
         [self.childWindows setObject:childWindow forKey:key];
+    }
+}
+
+- (BOOL)isMaximized {
+    return _maximized;
+}
+
+- (void)minimize {
+    // Minimal implementation - just unmap the window
+    if (self.window != XCB_NONE && self.connection) {
+        xcb_unmap_window([self.connection connection], self.window);
+        [self.connection flush];
+        NSLog(@"XCBFrame: Minimized window %u", self.window);
+    }
+}
+
+- (BOOL)onScreen {
+    // Simple implementation - assume it's on screen if it has a valid window ID
+    return (self.window != XCB_NONE);
+}
+
+- (void)restoreDimensionAndPosition {
+    // Restore from maximized state
+    if (_maximized && self.window != XCB_NONE && self.connection) {
+        uint32_t values[4];
+        values[0] = (uint32_t)_savedRect.origin.x;
+        values[1] = (uint32_t)_savedRect.origin.y;
+        values[2] = (uint32_t)_savedRect.size.width;
+        values[3] = (uint32_t)_savedRect.size.height;
+        
+        xcb_configure_window([self.connection connection],
+                           self.window,
+                           XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y |
+                           XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT,
+                           values);
+        
+        self.windowRect = _savedRect;
+        _maximized = NO;
+        [self.connection flush];
+        NSLog(@"XCBFrame: Restored window %u to saved position", self.window);
     }
 }
 

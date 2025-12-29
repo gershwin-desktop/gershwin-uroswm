@@ -7,6 +7,7 @@
 //
 
 #import <Foundation/Foundation.h>
+#import <AppKit/AppKit.h>
 #import <xcb/xcb.h>
 #import <xcb/xcb_icccm.h>
 
@@ -41,6 +42,32 @@ static inline XCBPoint XCBMakePoint(double x, double y) {
     return p;
 }
 
+// Simple Size structure
+typedef struct {
+    double width;
+    double height;
+} XCBSize;
+
+static inline XCBSize XCBMakeSize(double width, double height) {
+    XCBSize s;
+    s.width = width;
+    s.height = height;
+    return s;
+}
+
+// Simple Rect structure
+typedef struct {
+    XCBPoint origin;
+    XCBSize size;
+} XCBRect;
+
+static inline XCBRect XCBMakeRect(XCBPoint origin, XCBSize size) {
+    XCBRect r;
+    r.origin = origin;
+    r.size = size;
+    return r;
+}
+
 #pragma mark - XCBVisual
 
 @interface XCBVisual : NSObject
@@ -73,10 +100,12 @@ static inline XCBPoint XCBMakePoint(double x, double y) {
 @property (strong, nonatomic) XCBConnection *connection;
 @property (strong, nonatomic) NSString *windowTitle;
 @property (strong, nonatomic) XCBWindow *parentWindow;
+@property (assign, nonatomic) XCBRect windowRect;
 
 - (instancetype)init;
 - (void)setWindow:(xcb_window_t)window;
 - (void)setConnection:(XCBConnection*)connection;
+- (XCBRect)windowRect;
 
 @end
 
@@ -93,6 +122,7 @@ static inline XCBPoint XCBMakePoint(double x, double y) {
 - (void)setPixmap:(xcb_pixmap_t)pixmap;
 - (xcb_pixmap_t)pixmap;
 - (xcb_pixmap_t)dPixmap;
+- (void)createPixmap;
 
 @end
 
@@ -103,11 +133,17 @@ static inline XCBPoint XCBMakePoint(double x, double y) {
 @property (strong, nonatomic) NSMutableDictionary *childWindows;
 @property (strong, nonatomic) XCBWindow *clientWindow;
 @property (assign, nonatomic) NSRect windowRect;
+@property (assign, nonatomic) BOOL maximized;
+@property (assign, nonatomic) NSRect savedRect; // For restoring from maximized state
 
 - (instancetype)initWithClientWindow:(XCBWindow*)clientWindow 
                       withConnection:(XCBConnection*)connection;
 - (XCBWindow*)childWindowForKey:(NSString*)key;
 - (void)setChildWindow:(XCBWindow*)childWindow forKey:(NSString*)key;
+- (BOOL)isMaximized;
+- (void)minimize;
+- (BOOL)onScreen;
+- (void)restoreDimensionAndPosition;
 
 @end
 
