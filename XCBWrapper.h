@@ -11,6 +11,43 @@
 #import <xcb/xcb.h>
 #import <xcb/xcb_icccm.h>
 
+// Import GNUstep window level constants
+typedef enum {
+    WindowTypeNormal,
+    WindowTypeDesktop,
+    WindowTypeDock,
+    WindowTypePanel,
+    WindowTypeDialog
+} WindowType;
+
+// GNUstep Window Manager Attributes (from libs-back)
+typedef struct {
+    unsigned long flags;
+    unsigned long window_style;
+    unsigned long window_level;
+    unsigned long reserved;
+    xcb_pixmap_t miniaturize_pixmap;
+    xcb_pixmap_t close_pixmap;
+    xcb_pixmap_t miniaturize_mask;
+    xcb_pixmap_t close_mask;
+    unsigned long extra_flags;
+} GNUstepWMAttributes;
+
+// GNUstep WM attribute flags
+#define GSWindowStyleAttr           (1<<0)
+#define GSWindowLevelAttr           (1<<1)
+#define GSMiniaturizePixmapAttr     (1<<3)
+#define GSClosePixmapAttr           (1<<4)
+#define GSMiniaturizeMaskAttr       (1<<5)
+#define GSCloseMaskAttr             (1<<6)
+#define GSExtraFlagsAttr            (1<<7)
+
+// GNUstep extra flags for window filtering
+#define GSDocumentEditedFlag                    (1<<0)
+#define GSWindowWillResizeNotificationsFlag     (1<<1)
+#define GSWindowWillMoveNotificationsFlag       (1<<2)
+#define GSNoApplicationIconFlag                 (1<<5)
+
 // Forward declarations
 @class XCBConnection;
 @class XCBWindow;
@@ -104,12 +141,28 @@ static inline XCBRect XCBMakeRect(XCBPoint origin, XCBSize size) {
 @property (strong, nonatomic) XCBWindow *parentWindow;
 @property (assign, nonatomic) XCBRect windowRect;
 
+// GNUstep Window Manager attributes for filtering
+@property (assign, nonatomic) GNUstepWMAttributes wmAttributes;
+@property (assign, nonatomic) unsigned long windowStyle;
+@property (assign, nonatomic) unsigned long windowLevel;
+@property (assign, nonatomic) BOOL skipTaskbar;
+@property (assign, nonatomic) BOOL skipPager;
+@property (assign, nonatomic) BOOL documentEdited;
+
 - (instancetype)init;
 - (void)setWindow:(xcb_window_t)window;
 - (void)setConnection:(XCBConnection*)connection;
 - (XCBRect)windowRect;
 - (void)close;
 - (void)maximizeToSize:(XCBSize)size andPosition:(XCBPoint)position;
+
+// Window filtering methods
+- (void)updateWMAttributes;
+- (BOOL)shouldShowInTaskbar;
+- (BOOL)shouldShowInPager;
+- (BOOL)shouldDecorate;
+- (void)setSkipTaskbar:(BOOL)skip;
+- (void)setSkipPager:(BOOL)skip;
 
 @end
 
@@ -196,6 +249,14 @@ static inline XCBRect XCBMakeRect(XCBPoint origin, XCBSize size) {
 @property (assign, nonatomic) xcb_connection_t *connection;
 @property (assign, nonatomic) BOOL needFlush;
 
+// Store NSWindow wrappers for X11 applications
+@property (strong, nonatomic) NSMutableDictionary *nsWindowWrappers;
+// Map titlebar/frame window IDs back to original X11 window IDs
+@property (strong, nonatomic) NSMutableDictionary *titlebarToClientMap;
+// Track window dragging state
+@property (assign, nonatomic) BOOL isDragging;
+@property (assign, nonatomic) xcb_window_t draggingWindow;
+
 // Singleton
 + (instancetype)sharedConnectionAsWindowManager:(BOOL)asWindowManager;
 
@@ -221,6 +282,17 @@ static inline XCBRect XCBMakeRect(XCBPoint origin, XCBSize size) {
 - (void)registerWindow:(XCBWindow*)window;
 - (void)mapWindow:(XCBWindow*)window;
 - (XCBWindow*)windowForXCBId:(xcb_window_t)windowId;
+
+// Window filtering utilities (legacy)
+- (void)detectWindowTypeForWindow:(XCBWindow*)window;
+- (BOOL)shouldManageWindow:(XCBWindow*)window;
+
+// NSWindow wrapper approach (new)
+- (WindowType)detectWindowTypeForX11Window:(xcb_window_t)x11Window;
+- (NSWindow*)createNSWindowWrapperForX11Window:(xcb_window_t)x11Window;
+- (BOOL)shouldManageNSWindow:(NSWindow*)nsWindow;
+- (BOOL)isGNUstepApplication:(xcb_window_t)x11Window;
+- (void)updateNSWindowWrapperPosition:(xcb_window_t)x11Window;
 
 // Window manager operations
 - (void)registerAsWindowManager:(BOOL)registerFlag

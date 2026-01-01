@@ -289,6 +289,27 @@
             [self handleResizeComplete:releaseEvent];
             break;
         }
+        case XCB_MOTION_NOTIFY: {
+            xcb_motion_notify_event_t *motionEvent = (xcb_motion_notify_event_t *)event;
+            // Let xcbkit handle the motion first
+            [connection handleMotionNotify:motionEvent];
+
+            // Update NSWindow wrapper position for moved client windows
+            // TEMPORARILY DISABLED to debug X11 drawing issues
+            /*
+            NSNumber *titlebarKey = @(motionEvent->event);
+            NSNumber *clientKey = [connection titlebarToClientMap][titlebarKey];
+            if (clientKey) {
+                xcb_window_t clientWindow = [clientKey unsignedIntValue];
+                [connection updateNSWindowWrapperPosition:clientWindow];
+            }
+            */
+
+            // Handle GSTheme updates during motion
+            [self clearTitlebarBackgroundBeforeResize:motionEvent];
+            [self handleResizeDuringMotion:motionEvent];
+            break;
+        }
         case XCB_MAP_NOTIFY: {
             xcb_map_notify_event_t *notifyEvent = (xcb_map_notify_event_t *)event;
             [connection handleMapNotify:notifyEvent];
@@ -299,6 +320,20 @@
 
             // Let XCBConnection handle the map request normally (this creates titlebar structure)
             [connection handleMapRequest:mapRequestEvent];
+
+            // Create NSWindow wrapper for external X11 applications
+            // TEMPORARILY DISABLED to debug X11 drawing issues
+            /*
+            if (![connection isGNUstepApplication:mapRequestEvent->window]) {
+                WindowType windowType = [connection detectWindowTypeForX11Window:mapRequestEvent->window];
+                if (windowType == WindowTypeNormal) {
+                    NSWindow *wrapper = [connection createNSWindowWrapperForX11Window:mapRequestEvent->window];
+                    if (wrapper && [connection shouldManageNSWindow:wrapper]) {
+                        NSLog(@"Created and will manage NSWindow wrapper for X11 window %u", mapRequestEvent->window);
+                    }
+                }
+            }
+            */
 
             // Hide borders for windows with fixed sizes (like info panels and logout)
             [self adjustBorderForFixedSizeWindow:mapRequestEvent->window];

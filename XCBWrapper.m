@@ -90,6 +90,14 @@ NSString * const ClientWindow = @"ClientWindow";
         _window = XCB_NONE;
         _windowTitle = @"";
         _windowRect = XCBMakeRect(XCBMakePoint(0, 0), XCBMakeSize(0, 0));
+
+        // Initialize GNUstep WM attributes
+        memset(&_wmAttributes, 0, sizeof(GNUstepWMAttributes));
+        _windowStyle = 0;
+        _windowLevel = 0;
+        _skipTaskbar = NO;
+        _skipPager = NO;
+        _documentEdited = NO;
     }
     return self;
 }
@@ -149,6 +157,63 @@ NSString * const ClientWindow = @"ClientWindow";
 - (void)maximizeToSize:(XCBSize)size andPosition:(XCBPoint)position {
     // Basic implementation for XCBWindow maximize
     self.windowRect = XCBMakeRect(position, size);
+}
+
+#pragma mark - Window Filtering Methods
+
+- (void)updateWMAttributes {
+    // Update the wmAttributes struct from individual properties
+    GNUstepWMAttributes attrs = self.wmAttributes;
+    attrs.flags = 0;
+
+    if (self.windowStyle != 0) {
+        attrs.flags |= GSWindowStyleAttr;
+        attrs.window_style = self.windowStyle;
+    }
+
+    if (self.windowLevel != 0) {
+        attrs.flags |= GSWindowLevelAttr;
+        attrs.window_level = self.windowLevel;
+    }
+
+    // Set extra flags based on properties
+    attrs.extra_flags = 0;
+    if (self.documentEdited) {
+        attrs.extra_flags |= GSDocumentEditedFlag;
+    }
+    if (self.skipTaskbar) {
+        attrs.extra_flags |= GSNoApplicationIconFlag;
+    }
+
+    if (attrs.extra_flags != 0) {
+        attrs.flags |= GSExtraFlagsAttr;
+    }
+
+    self.wmAttributes = attrs;
+}
+
+- (BOOL)shouldShowInTaskbar {
+    return !self.skipTaskbar;
+}
+
+- (BOOL)shouldShowInPager {
+    return !self.skipPager;
+}
+
+- (BOOL)shouldDecorate {
+    // Don't decorate windows that skip taskbar (like docks, panels)
+    // or windows with special window levels
+    return ![self skipTaskbar] && self.windowLevel == 0;
+}
+
+- (void)setSkipTaskbar:(BOOL)skip {
+    _skipTaskbar = skip;
+    [self updateWMAttributes];
+}
+
+- (void)setSkipPager:(BOOL)skip {
+    _skipPager = skip;
+    [self updateWMAttributes];
 }
 
 @end
@@ -486,8 +551,12 @@ static XCBConnection *sharedConnection = nil;
     self = [super init];
     if (self) {
         _windowsMap = [[NSMutableDictionary alloc] init];
+        _nsWindowWrappers = [[NSMutableDictionary alloc] init];
+        _titlebarToClientMap = [[NSMutableDictionary alloc] init];
         _screens = [[NSMutableArray alloc] init];
         _needFlush = NO;
+        _isDragging = NO;
+        _draggingWindow = XCB_NONE;
         
         // Connect to X server
         int screenNum;
@@ -643,20 +712,83 @@ static XCBConnection *sharedConnection = nil;
 }
 
 - (void)handleButtonPress:(xcb_button_press_event_t*)event {
-    // Minimal implementation - button press handling
-    // NSLog(@"Button press on window %u", event->event);
+    // Start drag operation for titlebar or frame windows
+    XCBWindow *pressedWindow = [self windowForXCBId:event->event];
+    if (!pressedWindow) {
+        return;
+    }
+
+    // Allow dragging of titlebar windows or frame windows
+    if ([pressedWindow isKindOfClass:[XCBTitleBar class]] ||
+        [pressedWindow isKindOfClass:[XCBFrame class]]) {
+        self.isDragging = YES;
+        self.draggingWindow = event->event;
+        NSLog(@"Started drag for window %u (type: %@)", event->event, [pressedWindow class]);
+    }
 }
 
 - (void)handleButtonRelease:(xcb_button_release_event_t*)event {
-    // Minimal implementation
-    // NSLog(@"Button release on window %u", event->event);
+    // End drag operation
+    if (self.isDragging) {
+        NSLog(@"Ended drag for window %u", self.draggingWindow);
+        self.isDragging = NO;
+        self.draggingWindow = XCB_NONE;
+    }
 }
 
 - (void)handleMotionNotify:(xcb_motion_notify_event_t*)event {
-    // Minimal implementation for window dragging/resizing
-    // This is a complex operation that was handled by XCBKit
-    // For now, just log
-    // NSLog(@"Motion notify for window %u", event->event);
+    // Only handle movement during active drag operations
+    if (!self.isDragging) {
+        return; // Ignore motion events when not dragging
+    }
+
+    // Find which window is being dragged
+    XCBWindow *draggedWindow = [self windowForXCBId:event->event];
+    if (!draggedWindow) {
+        return;
+    }
+
+    // If dragging a titlebar, move the parent frame instead
+    XCBWindow *windowToMove = draggedWindow;
+    if ([draggedWindow isKindOfClass:[XCBTitleBar class]]) {
+        windowToMove = draggedWindow.parentWindow;
+        NSLog(@"Dragging titlebar %u, moving parent frame %u", event->event, windowToMove.window);
+    }
+
+    if (windowToMove && [windowToMove isKindOfClass:[XCBFrame class]]) {
+        // Calculate movement delta from last position
+        static int lastRootX = 0, lastRootY = 0;
+        static BOOL hasLastPosition = NO;
+
+        if (hasLastPosition) {
+            int deltaX = event->root_x - lastRootX;
+            int deltaY = event->root_y - lastRootY;
+
+            // Get current frame position
+            XCBRect currentRect = [windowToMove windowRect];
+
+            // Calculate new position
+            int newX = (int)currentRect.origin.x + deltaX;
+            int newY = (int)currentRect.origin.y + deltaY;
+
+            // Move the entire frame (which includes titlebar and client)
+            uint32_t values[2] = { (uint32_t)newX, (uint32_t)newY };
+            xcb_configure_window(self.connection, windowToMove.window,
+                                XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y, values);
+
+            // Update the frame's windowRect
+            currentRect.origin.x = newX;
+            currentRect.origin.y = newY;
+            [windowToMove setWindowRect:currentRect];
+
+            NSLog(@"Moving frame %u to (%d, %d) delta=(%d, %d)",
+                  windowToMove.window, newX, newY, deltaX, deltaY);
+        }
+
+        lastRootX = event->root_x;
+        lastRootY = event->root_y;
+        hasLastPosition = YES;
+    }
 }
 
 - (void)handleMapNotify:(xcb_map_notify_event_t*)event {
@@ -691,7 +823,37 @@ static XCBConnection *sharedConnection = nil;
         return;
     }
     
-    // Create or get client window object
+    // Check if this is a GNUstep application - if so, don't wrap it
+    if ([self isGNUstepApplication:event->window]) {
+        NSLog(@"Window %u is from GNUstep application, skipping NSWindow wrapper", event->window);
+        xcb_map_window(self.connection, event->window);
+        free(geom_reply);
+        return;
+    }
+
+    // NEW APPROACH: Use NSWindow wrapper for external X11 applications only
+    NSWindow *nsWindow = [self createNSWindowWrapperForX11Window:event->window];
+    if (!nsWindow) {
+        NSLog(@"Failed to create NSWindow wrapper for %u, mapping directly", event->window);
+        xcb_map_window(self.connection, event->window);
+        free(geom_reply);
+        return;
+    }
+
+    // Use GNUstep's built-in filtering logic
+    if (![self shouldManageNSWindow:nsWindow]) {
+        NSLog(@"NSWindow for X11 window %u should not be managed, mapping directly", event->window);
+        xcb_map_window(self.connection, event->window);
+        free(geom_reply);
+        return;
+    }
+
+    // Store the NSWindow wrapper for movement handling
+    NSNumber *windowKey = @(event->window);
+    self.nsWindowWrappers[windowKey] = nsWindow;
+    NSLog(@"Stored NSWindow wrapper for X11 window %u for movement handling", event->window);
+
+    // Create traditional client window for backwards compatibility (for now)
     XCBWindow *clientWindow = [self windowForXCBId:event->window];
     if (!clientWindow) {
         clientWindow = [[XCBWindow alloc] init];
@@ -699,7 +861,7 @@ static XCBConnection *sharedConnection = nil;
         [clientWindow setConnection:self];
         [self registerWindow:clientWindow];
     }
-    
+
     // Create frame for the window
     XCBFrame *frame = [[XCBFrame alloc] initWithClientWindow:clientWindow withConnection:self];
     
@@ -784,6 +946,23 @@ static XCBConnection *sharedConnection = nil;
     
     [self registerWindow:titlebar];
     [frame setChildWindow:titlebar forKey:TitleBar];
+
+    // Map titlebar window ID back to original client window for movement handling
+    NSNumber *titlebarKey = @(titlebar.window);
+    NSNumber *clientKey = @(event->window);
+    self.titlebarToClientMap[titlebarKey] = clientKey;
+    NSLog(@"Mapped titlebar window %u to client window %u for movement", titlebar.window, event->window);
+
+    // Also map the frame window for client area dragging
+    NSNumber *frameKey = @(frame.window);
+    self.titlebarToClientMap[frameKey] = clientKey;
+    NSLog(@"Mapped frame window %u to client window %u for movement", frame.window, event->window);
+
+    // IMPORTANT: Also map the reparented client window itself
+    // When the client gets reparented into the frame, motion events come from it
+    // but we need to redirect them to the original client for NSWindow movement
+    self.titlebarToClientMap[clientKey] = clientKey;
+    NSLog(@"Mapped reparented client window %u to original client %u for movement", event->window, event->window);
     [frame setChildWindow:clientWindow forKey:ClientWindow];
     titlebar.parentWindow = frame;
     clientWindow.parentWindow = frame;
@@ -811,9 +990,24 @@ static XCBConnection *sharedConnection = nil;
 - (void)handleDestroyNotify:(xcb_destroy_notify_event_t*)event {
     // Minimal implementation - clean up
     NSLog(@"Destroy notify for window %u", event->window);
-    
+
     NSString *key = [NSString stringWithFormat:@"%u", event->window];
     [self.windowsMap removeObjectForKey:key];
+
+    // Clean up NSWindow wrapper if it exists
+    NSNumber *windowKey = @(event->window);
+    NSWindow *nsWindow = self.nsWindowWrappers[windowKey];
+    if (nsWindow) {
+        NSLog(@"Removing NSWindow wrapper for destroyed window %u", event->window);
+        [self.nsWindowWrappers removeObjectForKey:windowKey];
+    }
+
+    // Clean up titlebar mapping if this window was mapped
+    NSArray *keysToRemove = [self.titlebarToClientMap allKeysForObject:windowKey];
+    for (NSNumber *key in keysToRemove) {
+        NSLog(@"Removing titlebar mapping for destroyed client window %u", event->window);
+        [self.titlebarToClientMap removeObjectForKey:key];
+    }
 }
 
 - (void)handleConfigureRequest:(xcb_configure_request_event_t*)event {
@@ -950,8 +1144,242 @@ static XCBConnection *sharedConnection = nil;
     
     // Clean up
     free(convertedPixels);
-    
+
     return YES;
+}
+
+#pragma mark - Window Filtering Methods
+
+- (void)detectWindowTypeForWindow:(XCBWindow*)window {
+    if (!window || window.window == XCB_NONE) {
+        return;
+    }
+
+    // Default values
+    window.skipTaskbar = NO;
+    window.skipPager = NO;
+    window.windowLevel = 0;
+
+    // Get window class for basic filtering
+    xcb_get_property_cookie_t class_cookie = xcb_icccm_get_wm_class(self.connection, window.window);
+    xcb_icccm_get_wm_class_reply_t class_reply;
+
+    if (xcb_icccm_get_wm_class_reply(self.connection, class_cookie, &class_reply, NULL)) {
+        NSString *instanceName = [NSString stringWithUTF8String:class_reply.instance_name];
+        NSString *className = [NSString stringWithUTF8String:class_reply.class_name];
+
+        NSLog(@"Window class: instance='%@' class='%@'", instanceName, className);
+
+        // Filter common system windows that shouldn't be decorated
+        if ([className isEqualToString:@"DESKTOP"] ||
+            [className isEqualToString:@"Dock"] ||
+            [className isEqualToString:@"Panel"] ||
+            [instanceName isEqualToString:@"desktop"] ||
+            [instanceName isEqualToString:@"dock"] ||
+            [instanceName isEqualToString:@"panel"]) {
+
+            window.skipTaskbar = YES;
+            window.skipPager = YES;
+            NSLog(@"Window %u detected as system window (class: %@), will skip decoration", window.window, className);
+        }
+
+        xcb_icccm_get_wm_class_reply_wipe(&class_reply);
+    }
+
+    // Get window name for additional filtering
+    xcb_get_property_cookie_t name_cookie = xcb_icccm_get_wm_name(self.connection, window.window);
+    xcb_icccm_get_text_property_reply_t name_reply;
+
+    if (xcb_icccm_get_wm_name_reply(self.connection, name_cookie, &name_reply, NULL)) {
+        NSString *windowName = [NSString stringWithUTF8String:name_reply.name];
+        NSLog(@"Window name: '%@'", windowName);
+
+        // Filter by window name patterns
+        if ([windowName hasPrefix:@"Desktop"] ||
+            [windowName isEqualToString:@"GNUstep Dock"] ||
+            [windowName containsString:@"Panel"]) {
+            window.skipTaskbar = YES;
+            window.skipPager = YES;
+            NSLog(@"Window %u detected as system window (name: %@), will skip decoration", window.window, windowName);
+        }
+
+        xcb_icccm_get_text_property_reply_wipe(&name_reply);
+    }
+
+    // Update the window's WM attributes
+    [window updateWMAttributes];
+}
+
+- (BOOL)shouldManageWindow:(XCBWindow*)window {
+    if (!window) {
+        return NO;
+    }
+
+    // Don't manage windows that should skip the taskbar (docks, panels, etc.)
+    return [window shouldDecorate];
+}
+
+#pragma mark - NSWindow Wrapper Approach (New)
+
+- (WindowType)detectWindowTypeForX11Window:(xcb_window_t)x11Window {
+    if (x11Window == XCB_NONE) {
+        return WindowTypeNormal;
+    }
+
+    // Get window class for basic filtering
+    xcb_get_property_cookie_t class_cookie = xcb_icccm_get_wm_class(self.connection, x11Window);
+    xcb_icccm_get_wm_class_reply_t class_reply;
+
+    if (xcb_icccm_get_wm_class_reply(self.connection, class_cookie, &class_reply, NULL)) {
+        NSString *instanceName = [NSString stringWithUTF8String:class_reply.instance_name];
+        NSString *className = [NSString stringWithUTF8String:class_reply.class_name];
+
+        NSLog(@"X11 Window class: instance='%@' class='%@'", instanceName, className);
+
+        WindowType type = WindowTypeNormal;
+
+        // Detect window types based on class
+        if ([className isEqualToString:@"DESKTOP"] || [instanceName isEqualToString:@"desktop"]) {
+            type = WindowTypeDesktop;
+        } else if ([className isEqualToString:@"Dock"] || [instanceName isEqualToString:@"dock"]) {
+            type = WindowTypeDock;
+        } else if ([className isEqualToString:@"Panel"] || [instanceName isEqualToString:@"panel"]) {
+            type = WindowTypePanel;
+        }
+
+        xcb_icccm_get_wm_class_reply_wipe(&class_reply);
+        return type;
+    }
+
+    return WindowTypeNormal;
+}
+
+- (NSWindow*)createNSWindowWrapperForX11Window:(xcb_window_t)x11Window {
+    if (x11Window == XCB_NONE) {
+        return nil;
+    }
+
+    // Detect the window type
+    WindowType type = [self detectWindowTypeForX11Window:x11Window];
+
+    // Create NSWindow wrapper for the X11 window
+    // IMPORTANT: initWithWindowRef expects a POINTER to the window ID, not the ID itself
+    xcb_window_t windowId = x11Window;
+    NSWindow *nsWindow = [[NSWindow alloc] initWithWindowRef:&windowId];
+
+    if (!nsWindow) {
+        NSLog(@"Failed to create NSWindow wrapper for X11 window %u", x11Window);
+        return nil;
+    }
+
+    // Set appropriate window level based on detected type
+    switch (type) {
+        case WindowTypeDesktop:
+            [nsWindow setLevel:NSDesktopWindowLevel];
+            NSLog(@"X11 Window %u wrapped as Desktop window (level=%ld)", x11Window, (long)NSDesktopWindowLevel);
+            break;
+
+        case WindowTypeDock:
+            [nsWindow setLevel:NSDockWindowLevel];
+            NSLog(@"X11 Window %u wrapped as Dock window (level=%ld)", x11Window, (long)NSDockWindowLevel);
+            break;
+
+        case WindowTypePanel:
+            [nsWindow setLevel:NSStatusWindowLevel];
+            NSLog(@"X11 Window %u wrapped as Panel window (level=%ld)", x11Window, (long)NSStatusWindowLevel);
+            break;
+
+        case WindowTypeDialog:
+            [nsWindow setLevel:NSModalPanelWindowLevel];
+            NSLog(@"X11 Window %u wrapped as Dialog window (level=%ld)", x11Window, (long)NSModalPanelWindowLevel);
+            break;
+
+        case WindowTypeNormal:
+        default:
+            [nsWindow setLevel:NSNormalWindowLevel];
+            NSLog(@"X11 Window %u wrapped as Normal window (level=%ld)", x11Window, (long)NSNormalWindowLevel);
+            break;
+    }
+
+    return nsWindow;
+}
+
+- (BOOL)shouldManageNSWindow:(NSWindow*)nsWindow {
+    if (!nsWindow) {
+        return NO;
+    }
+
+    // Use NSWindow's built-in methods to determine if we should manage this window
+    NSInteger level = [nsWindow level];
+
+    // Don't manage desktop or dock level windows - they handle themselves
+    if (level == NSDesktopWindowLevel || level == NSDockWindowLevel || level == NSStatusWindowLevel) {
+        NSLog(@"NSWindow at level %ld should not be decorated", (long)level);
+        return NO;
+    }
+
+    // For external X11 windows wrapped with initWithWindowRef:, canBecomeMainWindow
+    // may not work as expected. For normal level windows, we should manage them.
+    if (level == NSNormalWindowLevel) {
+        NSLog(@"NSWindow at normal level should be managed");
+        return YES;
+    }
+
+    // For other levels, check if it can become main window
+    if (![nsWindow canBecomeMainWindow]) {
+        NSLog(@"NSWindow that can't become main should not be decorated");
+        return NO;
+    }
+
+    return YES;
+}
+
+- (BOOL)isGNUstepApplication:(xcb_window_t)x11Window {
+    if (x11Window == XCB_NONE) {
+        return NO;
+    }
+
+    // Get window class for detection
+    xcb_get_property_cookie_t class_cookie = xcb_icccm_get_wm_class(self.connection, x11Window);
+    xcb_icccm_get_wm_class_reply_t class_reply;
+
+    if (xcb_icccm_get_wm_class_reply(self.connection, class_cookie, &class_reply, NULL)) {
+        NSString *className = [NSString stringWithUTF8String:class_reply.class_name];
+
+        // Check for GNUstep application indicators
+        BOOL isGNUstep = [className isEqualToString:@"GNUstep"] ||
+                        [className hasPrefix:@"GNUstep"] ||
+                        [className hasSuffix:@"GNUstep"];
+
+        NSLog(@"Checking if window is GNUstep app: class='%@' -> %@", className, isGNUstep ? @"YES" : @"NO");
+
+        xcb_icccm_get_wm_class_reply_wipe(&class_reply);
+        return isGNUstep;
+    }
+
+    return NO;
+}
+
+- (void)updateNSWindowWrapperPosition:(xcb_window_t)x11Window {
+    if (!self.nsWindowWrappers) {
+        return;
+    }
+
+    NSNumber *windowKey = @(x11Window);
+    NSWindow *wrapper = self.nsWindowWrappers[windowKey];
+    if (!wrapper) {
+        return;
+    }
+
+    // Get current X11 window geometry
+    xcb_get_geometry_cookie_t geo_cookie = xcb_get_geometry(self.connection, x11Window);
+    xcb_get_geometry_reply_t *geo_reply = xcb_get_geometry_reply(self.connection, geo_cookie, NULL);
+
+    if (geo_reply) {
+        NSRect newFrame = NSMakeRect(geo_reply->x, geo_reply->y, geo_reply->width, geo_reply->height);
+        [wrapper setFrame:newFrame display:NO];
+        free(geo_reply);
+    }
 }
 
 @end
