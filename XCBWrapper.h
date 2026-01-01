@@ -144,14 +144,18 @@ static inline XCBRect XCBMakeRect(XCBPoint origin, XCBSize size) {
 @property (assign, nonatomic) XCBRect windowRect;
 @property (assign, nonatomic) BOOL maximized;
 @property (assign, nonatomic) NSRect savedRect; // For restoring from maximized state
+@property (assign, nonatomic) BOOL isDragging;
+@property (assign, nonatomic) XCBPoint dragStartPosition;
+@property (assign, nonatomic) XCBPoint windowStartPosition;
 
-- (instancetype)initWithClientWindow:(XCBWindow*)clientWindow 
+- (instancetype)initWithClientWindow:(XCBWindow*)clientWindow
                       withConnection:(XCBConnection*)connection;
 - (XCBWindow*)childWindowForKey:(NSString*)key;
 - (void)setChildWindow:(XCBWindow*)childWindow forKey:(NSString*)key;
 - (BOOL)isMaximized;
 - (void)minimize;
 - (void)maximizeToSize:(XCBSize)size andPosition:(XCBPoint)position;
+- (void)moveToPosition:(XCBPoint)position;
 - (XCBScreen*)onScreen;
 - (void)restoreDimensionAndPosition;
 - (void)setNeedDestroy:(BOOL)needDestroy;

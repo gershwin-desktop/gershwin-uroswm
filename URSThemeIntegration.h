@@ -11,6 +11,20 @@
 #import <xcb/xcb.h>
 #import "XCBWrapper.h"
 
+// Titlebar button types
+typedef NS_ENUM(NSInteger, GSThemeTitleBarButton) {
+    GSThemeTitleBarButtonNone = 0,
+    GSThemeTitleBarButtonClose = 1,
+    GSThemeTitleBarButtonMiniaturize = 2,
+    GSThemeTitleBarButtonZoom = 3
+};
+
+// Titlebar color states (from XCBKit)
+typedef NS_ENUM(NSInteger, TitleBarColor) {
+    TitleBarDownColor = 0,
+    TitleBarUpColor = 1
+};
+
 @interface URSThemeIntegration : NSObject
 
 // Singleton access

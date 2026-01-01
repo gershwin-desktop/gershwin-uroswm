@@ -14,7 +14,6 @@
 #import <xcb/xcb.h>
 #import <xcb/xcb_icccm.h>
 #import "URSThemeIntegration.h"
-#import "GSThemeTitleBar.h"
 
 @implementation URSHybridEventHandler
 

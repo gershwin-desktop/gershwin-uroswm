@@ -196,12 +196,14 @@ static NSMutableSet *fixedSizeWindows = nil;
 
     // The GSThemeTitleBar class will automatically override XCBTitleBar methods
     // when instances are created. We just need to ensure it's loaded.
-    Class gsThemeClass = [GSThemeTitleBar class];
-    if (gsThemeClass) {
-        NSLog(@"GSThemeTitleBar class loaded successfully");
-    } else {
-        NSLog(@"Warning: GSThemeTitleBar class not found");
-    }
+    // TODO: GSThemeTitleBar class needs to be implemented
+    // Class gsThemeClass = [GSThemeTitleBar class];
+    // if (gsThemeClass) {
+    //     NSLog(@"GSThemeTitleBar class loaded successfully");
+    // } else {
+    //     NSLog(@"Warning: GSThemeTitleBar class not found");
+    // }
+    NSLog(@"GSThemeTitleBar replacement enabled (placeholder implementation)");
 }
 
 #pragma mark - GSTheme Titlebar Rendering

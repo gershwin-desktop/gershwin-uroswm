@@ -257,7 +257,7 @@ NSString * const ClientWindow = @"ClientWindow";
 
 @dynamic windowRect;
 
-- (instancetype)initWithClientWindow:(XCBWindow*)clientWindow 
+- (instancetype)initWithClientWindow:(XCBWindow*)clientWindow
                       withConnection:(XCBConnection*)connection {
     self = [super init];
     if (self) {
@@ -267,7 +267,10 @@ NSString * const ClientWindow = @"ClientWindow";
         self.windowRect = XCBMakeRect(XCBMakePoint(0.0, 0.0), XCBMakeSize(0.0, 0.0));
         _maximized = NO;
         _savedRect = NSMakeRect(0, 0, 0, 0);
-        
+        _isDragging = NO;
+        _dragStartPosition = XCBMakePoint(0, 0);
+        _windowStartPosition = XCBMakePoint(0, 0);
+
         // Generate frame window ID
         self.window = xcb_generate_id(connection.connection);
     }
@@ -305,23 +308,42 @@ NSString * const ClientWindow = @"ClientWindow";
             _savedRect = NSMakeRect(self.windowRect.origin.x, self.windowRect.origin.y,
                                    self.windowRect.size.width, self.windowRect.size.height);
         }
-        
+
         uint32_t values[4];
         values[0] = (uint32_t)position.x;
         values[1] = (uint32_t)position.y;
         values[2] = (uint32_t)size.width;
         values[3] = (uint32_t)size.height;
-        
+
         xcb_configure_window([self.connection connection],
                            self.window,
                            XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y |
                            XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT,
                            values);
-        
+
         self.windowRect = XCBMakeRect(position, size);
         _maximized = YES;
         [self.connection flush];
         NSLog(@"XCBFrame: Maximized window %u", self.window);
+    }
+}
+
+- (void)moveToPosition:(XCBPoint)position {
+    // Move window to new position without changing size
+    if (self.window != XCB_NONE && self.connection) {
+        uint32_t values[2];
+        values[0] = (uint32_t)position.x;
+        values[1] = (uint32_t)position.y;
+
+        xcb_configure_window([self.connection connection],
+                           self.window,
+                           XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y,
+                           values);
+
+        // Update our internal window rect
+        self.windowRect = XCBMakeRect(position, self.windowRect.size);
+        [self.connection flush];
+        NSLog(@"XCBFrame: Moved window %u to position (%.0f, %.0f)", self.window, position.x, position.y);
     }
 }
 
@@ -643,20 +665,151 @@ static XCBConnection *sharedConnection = nil;
 }
 
 - (void)handleButtonPress:(xcb_button_press_event_t*)event {
-    // Minimal implementation - button press handling
-    // NSLog(@"Button press on window %u", event->event);
+    // Handle button press for window dragging
+    XCBWindow *window = [self windowForXCBId:event->event];
+    if (!window) {
+        return;
+    }
+
+    // Only handle left mouse button (button 1)
+    if (event->detail != 1) {
+        return;
+    }
+
+    // Check if this is a titlebar or frame window
+    XCBFrame *frame = nil;
+    BOOL isTitleBar = NO;
+
+    if ([window isKindOfClass:[XCBFrame class]]) {
+        frame = (XCBFrame*)window;
+    } else if ([window isKindOfClass:[XCBTitleBar class]]) {
+        isTitleBar = YES;
+        if (window.parentWindow && [window.parentWindow isKindOfClass:[XCBFrame class]]) {
+            frame = (XCBFrame*)window.parentWindow;
+        }
+    } else if (window.parentWindow && [window.parentWindow isKindOfClass:[XCBFrame class]]) {
+        frame = (XCBFrame*)window.parentWindow;
+    }
+
+    // Only start dragging if we clicked on titlebar or frame (not client window)
+    if (frame && (isTitleBar || [window isKindOfClass:[XCBFrame class]])) {
+        // Don't allow dragging if window is maximized
+        if (frame.maximized) {
+            return;
+        }
+
+        // Start dragging
+        frame.isDragging = YES;
+        frame.dragStartPosition = XCBMakePoint(event->root_x, event->root_y);
+        frame.windowStartPosition = XCBMakePoint(frame.windowRect.origin.x, frame.windowRect.origin.y);
+
+        NSLog(@"XCBFrame: Started dragging window %u from position (%.0f, %.0f)",
+              frame.window, frame.windowStartPosition.x, frame.windowStartPosition.y);
+
+        // Grab the pointer to ensure we receive all motion events
+        xcb_grab_pointer(self.connection,
+                        0, // owner_events
+                        event->event,
+                        XCB_EVENT_MASK_BUTTON_RELEASE | XCB_EVENT_MASK_POINTER_MOTION,
+                        XCB_GRAB_MODE_ASYNC,
+                        XCB_GRAB_MODE_ASYNC,
+                        XCB_NONE, // confine_to
+                        XCB_NONE, // cursor
+                        XCB_CURRENT_TIME);
+    }
 }
 
 - (void)handleButtonRelease:(xcb_button_release_event_t*)event {
-    // Minimal implementation
-    // NSLog(@"Button release on window %u", event->event);
+    // Handle button release to end window dragging
+    XCBWindow *window = [self windowForXCBId:event->event];
+    if (!window) {
+        return;
+    }
+
+    // Only handle left mouse button (button 1)
+    if (event->detail != 1) {
+        return;
+    }
+
+    // Find the frame that might be dragging
+    XCBFrame *frame = nil;
+    if ([window isKindOfClass:[XCBFrame class]]) {
+        frame = (XCBFrame*)window;
+    } else if ([window isKindOfClass:[XCBTitleBar class]]) {
+        if (window.parentWindow && [window.parentWindow isKindOfClass:[XCBFrame class]]) {
+            frame = (XCBFrame*)window.parentWindow;
+        }
+    } else if (window.parentWindow && [window.parentWindow isKindOfClass:[XCBFrame class]]) {
+        frame = (XCBFrame*)window.parentWindow;
+    }
+
+    // Check if any frame is currently dragging and stop it
+    if (!frame) {
+        // Search through all windows to find any dragging frame
+        for (NSString *key in self.windowsMap) {
+            XCBWindow *win = [self.windowsMap objectForKey:key];
+            if ([win isKindOfClass:[XCBFrame class]]) {
+                XCBFrame *checkFrame = (XCBFrame*)win;
+                if (checkFrame.isDragging) {
+                    frame = checkFrame;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (frame && frame.isDragging) {
+        // Stop dragging
+        frame.isDragging = NO;
+        NSLog(@"XCBFrame: Stopped dragging window %u at position (%.0f, %.0f)",
+              frame.window, frame.windowRect.origin.x, frame.windowRect.origin.y);
+
+        // Ungrab the pointer
+        xcb_ungrab_pointer(self.connection, XCB_CURRENT_TIME);
+    }
 }
 
 - (void)handleMotionNotify:(xcb_motion_notify_event_t*)event {
-    // Minimal implementation for window dragging/resizing
-    // This is a complex operation that was handled by XCBKit
-    // For now, just log
-    // NSLog(@"Motion notify for window %u", event->event);
+    // Handle window dragging
+    XCBWindow *window = [self windowForXCBId:event->event];
+    if (!window) {
+        return;
+    }
+
+    // Check if this is a frame window and if it's being dragged
+    XCBFrame *frame = nil;
+    if ([window isKindOfClass:[XCBFrame class]]) {
+        frame = (XCBFrame*)window;
+    } else if (window.parentWindow && [window.parentWindow isKindOfClass:[XCBFrame class]]) {
+        frame = (XCBFrame*)window.parentWindow;
+    }
+
+    if (frame && frame.isDragging) {
+        // Calculate new position based on mouse movement
+        int16_t deltaX = event->root_x - frame.dragStartPosition.x;
+        int16_t deltaY = event->root_y - frame.dragStartPosition.y;
+
+        XCBPoint newPosition = XCBMakePoint(
+            frame.windowStartPosition.x + deltaX,
+            frame.windowStartPosition.y + deltaY
+        );
+
+        // Ensure window doesn't go off screen (basic bounds checking)
+        XCBScreen *screen = [frame onScreen];
+        if (screen) {
+            if (newPosition.x < 0) newPosition.x = 0;
+            if (newPosition.y < 0) newPosition.y = 0;
+            if (newPosition.x + frame.windowRect.size.width > screen.width) {
+                newPosition.x = screen.width - frame.windowRect.size.width;
+            }
+            if (newPosition.y + frame.windowRect.size.height > screen.height) {
+                newPosition.y = screen.height - frame.windowRect.size.height;
+            }
+        }
+
+        // Move the window
+        [frame moveToPosition:newPosition];
+    }
 }
 
 - (void)handleMapNotify:(xcb_map_notify_event_t*)event {
