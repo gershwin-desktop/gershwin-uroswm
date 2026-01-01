@@ -445,7 +445,7 @@
 
         NSLog(@"GSTheme: Focus %@ for window %@", isActive ? @"gained" : @"lost", titlebar.windowTitle);
 
-        // Re-render titlebar with GSTheme using the correct active/inactive state
+        // Re-render titlebar with GSTheme using standalone method (works reliably)
         [URSThemeIntegration renderGSThemeToWindow:frame
                                              frame:frame
                                              title:[titlebar windowTitle]
@@ -689,11 +689,11 @@
 
                         NSLog(@"Found frame for client window %u, applying GSTheme to titlebar", windowId);
 
-                        // Apply GSTheme rendering (this will override XCBKit's decoration)
+                        // Apply GSTheme rendering using standalone method (works reliably)
                         BOOL success = [URSThemeIntegration renderGSThemeToWindow:window
-                                                                             frame:frame
-                                                                             title:titlebar.windowTitle
-                                                                            active:YES];
+                                                                           frame:frame
+                                                                           title:titlebar.windowTitle
+                                                                          active:YES];
 
                         if (success) {
                             // Add to managed list so we can handle expose events
@@ -743,7 +743,7 @@
                 XCBWindow *frameTitle = [frame childWindowForKey:TitleBar];
 
                 if (frameTitle && frameTitle == titlebar) {
-                    // Reapply GSTheme rendering
+                    // Reapply GSTheme rendering using standalone method (works reliably)
                     [URSThemeIntegration renderGSThemeToWindow:window
                                                          frame:frame
                                                          title:titlebar.windowTitle

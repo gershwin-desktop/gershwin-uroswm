@@ -16,14 +16,12 @@ $(APP_NAME)_OBJC_FILES = \
 		URSHybridEventHandler.m \
 		UROSWMApplication.m \
 		URSThemeIntegration.m \
-		GSThemeTitleBar.m \
 		XCBWrapper.m
 
 $(APP_NAME)_HEADER_FILES = \
 		URSHybridEventHandler.h \
 		UROSWMApplication.h \
 		URSThemeIntegration.h \
-		GSThemeTitleBar.h \
 		XCBWrapper.h
 
 $(APP_NAME)_GUI_LIBS = -lxcb -lxcb-icccm $(shell pkg-config --libs xcb)

@@ -747,7 +747,7 @@ static XCBConnection *sharedConnection = nil;
     [self registerWindow:frame];
     frame.windowRect = XCBMakeRect(XCBMakePoint(frameX, frameY), XCBMakeSize(frameWidth, frameHeight));
     
-    // Create titlebar window
+    // Create titlebar window using XCBTitleBar (standalone GSTheme will handle theming)
     XCBTitleBar *titlebar = [[XCBTitleBar alloc] init];
     titlebar.window = xcb_generate_id(self.connection);
     titlebar.connection = self;

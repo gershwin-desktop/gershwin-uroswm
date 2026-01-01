@@ -8,7 +8,6 @@
 #import "URSThemeIntegration.h"
 #import "XCBWrapper.h"
 #import <objc/runtime.h>
-#import "GSThemeTitleBar.h"
 
 @implementation URSThemeIntegration
 
