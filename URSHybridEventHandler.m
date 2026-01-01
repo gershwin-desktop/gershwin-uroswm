@@ -373,13 +373,12 @@
 
     NSLog(@"GSTheme: Applying theme to new titlebar for window: %@", titlebar.windowTitle);
 
-    // Register with theme integration
-    [[URSThemeIntegration sharedInstance] handleWindowCreated:titlebar];
-
-    // Apply GSTheme rendering
-    BOOL success = [URSThemeIntegration renderGSThemeTitlebar:titlebar
+    // Apply GSTheme rendering using the working standalone method
+    XCBFrame *frame = (XCBFrame*)[titlebar parentWindow];
+    BOOL success = [URSThemeIntegration renderGSThemeToWindow:frame
+                                                        frame:frame
                                                         title:titlebar.windowTitle
-                                                       active:YES]; // Assume new windows are active
+                                                       active:YES];
 
     if (!success) {
         NSLog(@"GSTheme rendering failed for titlebar, falling back to Cairo");
@@ -467,18 +466,18 @@
 
     NSLog(@"GSTheme: Focus changed for window %@ (active: %d)", titlebar.windowTitle, active);
 
-    // Update theme integration
-    [[URSThemeIntegration sharedInstance] handleWindowFocusChanged:titlebar isActive:active];
-
-    // Re-render with new focus state
-    [URSThemeIntegration renderGSThemeTitlebar:titlebar
+    // Re-render with new focus state using the working standalone method
+    XCBFrame *frame = (XCBFrame*)[titlebar parentWindow];
+    [URSThemeIntegration renderGSThemeToWindow:frame
+                                         frame:frame
                                          title:titlebar.windowTitle
                                         active:active];
 }
 
 - (void)refreshAllManagedWindows {
     NSLog(@"GSTheme: Refreshing all managed windows with current theme");
-    [URSThemeIntegration refreshAllTitlebars];
+    // The refreshAllTitlebars method was removed since it wasn't working properly
+    // Individual windows are refreshed through event handling instead
 }
 
 // Simple periodic check for new windows that need GSTheme

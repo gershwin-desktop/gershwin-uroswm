@@ -34,29 +34,12 @@ typedef NS_ENUM(NSInteger, TitleBarColor) {
 + (void)initializeGSTheme;
 + (GSTheme*)currentTheme;
 
-// Enable GSThemeTitleBar replacement for all XCBTitleBar instances
-+ (void)enableGSThemeTitleBars;
-
-// Main titlebar rendering with GSTheme decorations
-+ (BOOL)renderGSThemeTitlebar:(XCBTitleBar*)titlebar
-                        title:(NSString*)title
-                       active:(BOOL)isActive;
-
-// Standalone GSTheme titlebar rendering (bypasses XCBTitleBar entirely)
+// GSTheme titlebar rendering
 + (BOOL)renderGSThemeToWindow:(XCBWindow*)window
                         frame:(XCBFrame*)frame
                         title:(NSString*)title
                        active:(BOOL)isActive;
 
-// Disable XCBTitleBar drawing by overriding its draw methods
-+ (void)disableXCBTitleBarDrawing:(XCBTitleBar*)titlebar;
-
-// Refresh all titlebars with current theme
-+ (void)refreshAllTitlebars;
-
-// Event handlers
-- (void)handleWindowCreated:(XCBTitleBar*)titlebar;
-- (void)handleWindowFocusChanged:(XCBTitleBar*)titlebar isActive:(BOOL)active;
 
 // Configuration
 @property (assign, nonatomic) BOOL enabled;
