@@ -336,7 +336,7 @@ static NSMutableSet *fixedSizeWindows = nil;
         // DEBUG: Add 2 pixels to width and shift 1 pixel left to cover both edges
         uint16_t targetWidth = frameRect.size.width + 2;
         int16_t targetX = -1;  // Shift titlebar 1 pixel left
-        NSLog(@"DEBUG: Resizing titlebar X11 window to %d at x=%d (frame=%d, current titlebar=%d)",
+        NSLog(@"DEBUG: Resizing titlebar X11 window to %d at x=%d (frame=%f, current titlebar=%f)",
               targetWidth, targetX, frameRect.size.width, titlebarRect.size.width);
 
         uint32_t values[2] = {(uint32_t)targetX, targetWidth};

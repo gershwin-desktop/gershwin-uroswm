@@ -930,7 +930,7 @@
 
         if (pixmapSize.width != titlebarRect.size.width ||
             pixmapSize.height != titlebarRect.size.height) {
-            NSLog(@"GSTheme: Titlebar size changed from %dx%d to %dx%d, recreating pixmap",
+            NSLog(@"GSTheme: Titlebar size changed from %fx%f to %fx%f, recreating pixmap",
                   pixmapSize.width, pixmapSize.height,
                   titlebarRect.size.width, titlebarRect.size.height);
 
@@ -1088,7 +1088,7 @@
                     // Recreate the titlebar pixmap at the restored size
                     [titlebar destroyPixmap];
                     [titlebar createPixmap];
-                    NSLog(@"GSTheme: Titlebar pixmap recreated for restored size %dx%d",
+                    NSLog(@"GSTheme: Titlebar pixmap recreated for restored size %fx%d",
                           restoredFrameRect.size.width, titleHgt);
 
                     // Redraw titlebar with GSTheme at restored size
