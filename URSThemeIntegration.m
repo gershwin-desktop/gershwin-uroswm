@@ -470,6 +470,13 @@ static NSMutableSet *fixedSizeWindows = nil;
         }
     }
 
+    // Set the rendered pixmap as the titlebar window background
+    [titlebar putWindowBackgroundWithPixmap:[titlebar pixmap]];
+
+    // Force titlebar window to redraw using its drawArea method
+    XCBRect titlebarRect = [titlebar windowRect];
+    [titlebar drawArea:titlebarRect];
+
     [titlebar.connection flush];
 
     return YES;

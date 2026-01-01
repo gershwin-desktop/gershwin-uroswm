@@ -146,6 +146,11 @@ NSString * const ClientWindow = @"ClientWindow";
     }
 }
 
+- (void)maximizeToSize:(XCBSize)size andPosition:(XCBPoint)position {
+    // Basic implementation for XCBWindow maximize
+    self.windowRect = XCBMakeRect(position, size);
+}
+
 @end
 
 #pragma mark - XCBTitleBar Implementation
@@ -155,28 +160,21 @@ NSString * const ClientWindow = @"ClientWindow";
 - (instancetype)init {
     self = [super init];
     if (self) {
-        _pixmap = XCB_NONE;
-        _dPixmap = XCB_NONE;
+        self.pixmap = XCB_NONE;
+        self.dPixmap = XCB_NONE;
         _frame = NSZeroRect;
         _isActive = NO;
     }
     return self;
 }
 
-- (void)setPixmap:(xcb_pixmap_t)pixmap {
-    _pixmap = pixmap;
-}
-
-- (xcb_pixmap_t)pixmap {
-    return _pixmap;
-}
 
 - (xcb_pixmap_t)dPixmap {
     return _dPixmap;
 }
 
 - (void)createPixmap {
-    if (_pixmap != XCB_NONE || !self.connection) {
+    if (self.pixmap != XCB_NONE || !self.connection) {
         return; // Already created or no connection
     }
     
@@ -186,22 +184,69 @@ NSString * const ClientWindow = @"ClientWindow";
         return;
     }
     
-    _pixmap = xcb_generate_id([self.connection connection]);
+    self.pixmap = xcb_generate_id([self.connection connection]);
     xcb_create_pixmap([self.connection connection],
                      24, // depth
-                     _pixmap,
+                     self.pixmap,
                      self.window,
                      (uint16_t)size.width,
                      (uint16_t)size.height);
     
     // Also create dPixmap (inactive pixmap)
-    _dPixmap = xcb_generate_id([self.connection connection]);
+    self.dPixmap = xcb_generate_id([self.connection connection]);
     xcb_create_pixmap([self.connection connection],
                      24, // depth
-                     _dPixmap,
+                     self.dPixmap,
                      self.window,
                      (uint16_t)size.width,
                      (uint16_t)size.height);
+}
+
+- (void)putWindowBackgroundWithPixmap:(xcb_pixmap_t)pixmap {
+    // Set the window background pixmap
+    if (self.window != XCB_NONE && self.connection) {
+        uint32_t values[] = { pixmap };
+        xcb_change_window_attributes([self.connection connection], self.window,
+                                   XCB_CW_BACK_PIXMAP, values);
+    }
+}
+
+- (void)drawArea:(XCBRect)rect {
+    // Basic drawing implementation - would need more sophisticated graphics code
+    if (self.window != XCB_NONE && self.connection) {
+        xcb_clear_area([self.connection connection], 0, self.window,
+                      (int16_t)rect.origin.x, (int16_t)rect.origin.y,
+                      (uint16_t)rect.size.width, (uint16_t)rect.size.height);
+    }
+}
+
+- (XCBSize)pixmapSize {
+    // Return the size based on the frame
+    return XCBMakeSize(self.frame.size.width, self.frame.size.height);
+}
+
+- (void)destroyPixmap {
+    // Destroy both pixmaps
+    if (self.pixmap != XCB_NONE && self.connection) {
+        xcb_free_pixmap([self.connection connection], self.pixmap);
+        self.pixmap = XCB_NONE;
+    }
+    if (self.dPixmap != XCB_NONE && self.connection) {
+        xcb_free_pixmap([self.connection connection], self.dPixmap);
+        self.dPixmap = XCB_NONE;
+    }
+}
+
+- (void)maximizeToSize:(XCBSize)size andPosition:(XCBPoint)position {
+    // Maximize titlebar - update frame and window rect
+    self.frame = NSMakeRect(position.x, position.y, size.width, size.height);
+    [super maximizeToSize:size andPosition:position];
+}
+
+- (XCBRect)windowRect {
+    // Override to return frame dimensions instead of inherited _windowRect
+    return XCBMakeRect(XCBMakePoint(self.frame.origin.x, self.frame.origin.y),
+                       XCBMakeSize(self.frame.size.width, self.frame.size.height));
 }
 
 @end
@@ -210,6 +255,8 @@ NSString * const ClientWindow = @"ClientWindow";
 
 @implementation XCBFrame
 
+@dynamic windowRect;
+
 - (instancetype)initWithClientWindow:(XCBWindow*)clientWindow 
                       withConnection:(XCBConnection*)connection {
     self = [super init];
@@ -217,9 +264,9 @@ NSString * const ClientWindow = @"ClientWindow";
         _clientWindow = clientWindow;
         self.connection = connection;
         _childWindows = [[NSMutableDictionary alloc] init];
-        _windowRect = NSZeroRect;
+        self.windowRect = XCBMakeRect(XCBMakePoint(0.0, 0.0), XCBMakeSize(0.0, 0.0));
         _maximized = NO;
-        _savedRect = NSZeroRect;
+        _savedRect = NSMakeRect(0, 0, 0, 0);
         
         // Generate frame window ID
         self.window = xcb_generate_id(connection.connection);
@@ -255,7 +302,8 @@ NSString * const ClientWindow = @"ClientWindow";
     if (self.window != XCB_NONE && self.connection) {
         // Save current position before maximizing
         if (!_maximized) {
-            _savedRect = self.windowRect;
+            _savedRect = NSMakeRect(self.windowRect.origin.x, self.windowRect.origin.y,
+                                   self.windowRect.size.width, self.windowRect.size.height);
         }
         
         uint32_t values[4];
@@ -270,16 +318,20 @@ NSString * const ClientWindow = @"ClientWindow";
                            XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT,
                            values);
         
-        self.windowRect = NSMakeRect(position.x, position.y, size.width, size.height);
+        self.windowRect = XCBMakeRect(position, size);
         _maximized = YES;
         [self.connection flush];
         NSLog(@"XCBFrame: Maximized window %u", self.window);
     }
 }
 
-- (BOOL)onScreen {
-    // Simple implementation - assume it's on screen if it has a valid window ID
-    return (self.window != XCB_NONE);
+- (XCBScreen*)onScreen {
+    // Return the first screen for simplicity
+    // In a more complete implementation, this would determine the actual screen
+    if (self.connection && [self.connection.screens count] > 0) {
+        return [self.connection.screens objectAtIndex:0];
+    }
+    return nil;
 }
 
 - (void)restoreDimensionAndPosition {
@@ -297,10 +349,18 @@ NSString * const ClientWindow = @"ClientWindow";
                            XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT,
                            values);
         
-        self.windowRect = _savedRect;
+        self.windowRect = XCBMakeRect(XCBMakePoint(_savedRect.origin.x, _savedRect.origin.y),
+                                     XCBMakeSize(_savedRect.size.width, _savedRect.size.height));
         _maximized = NO;
         [self.connection flush];
         NSLog(@"XCBFrame: Restored window %u to saved position", self.window);
+    }
+}
+
+- (void)setNeedDestroy:(BOOL)needDestroy {
+    // Simple implementation - could be extended to track destroy state
+    if (needDestroy) {
+        NSLog(@"XCBFrame: Window %u marked for destruction", self.window);
     }
 }
 
@@ -513,7 +573,7 @@ static XCBConnection *sharedConnection = nil;
     return [self.windowsMap objectForKey:key];
 }
 
-- (void)registerAsWindowManager:(BOOL)register 
+- (void)registerAsWindowManager:(BOOL)registerFlag
                        screenId:(int)screenId
                 selectionWindow:(XCBWindow*)selectionWindow {
     if (screenId >= [self.screens count]) {
@@ -651,8 +711,13 @@ static XCBConnection *sharedConnection = nil;
     int titlebarHeight = tbSettings.height;
     int borderWidth = 1;
     
-    int frameX = geom_reply->x;
-    int frameY = geom_reply->y - titlebarHeight;
+    int frameX = geom_reply->x - borderWidth;
+    int frameY = geom_reply->y - titlebarHeight - borderWidth;
+
+    // Ensure titlebar is not positioned above screen (Y >= 0)
+    if (frameY < 0) {
+        frameY = 0;
+    }
     int frameWidth = geom_reply->width + (borderWidth * 2);
     int frameHeight = geom_reply->height + titlebarHeight + (borderWidth * 2);
     
@@ -680,7 +745,7 @@ static XCBConnection *sharedConnection = nil;
                      frame_values);
     
     [self registerWindow:frame];
-    frame.windowRect = NSMakeRect(frameX, frameY, frameWidth, frameHeight);
+    frame.windowRect = XCBMakeRect(XCBMakePoint(frameX, frameY), XCBMakeSize(frameWidth, frameHeight));
     
     // Create titlebar window
     XCBTitleBar *titlebar = [[XCBTitleBar alloc] init];

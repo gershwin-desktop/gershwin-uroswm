@@ -1025,7 +1025,7 @@
         XCBRect titlebarRect = [titlebar windowRect];
         NSLog(@"GSTheme: Found titlebar, windowRect: %ux%u at (%d,%d), parentWindow: %@",
               (unsigned)titlebarRect.size.width, (unsigned)titlebarRect.size.height,
-              (int)titlebarRect.position.x, (int)titlebarRect.position.y,
+              (int)titlebarRect.origin.x, (int)titlebarRect.origin.y,
               [titlebar parentWindow] ? NSStringFromClass([[titlebar parentWindow] class]) : @"nil");
 
         // CRITICAL: Allow X11 to continue processing events

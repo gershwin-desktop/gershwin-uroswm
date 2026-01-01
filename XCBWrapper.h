@@ -109,6 +109,7 @@ static inline XCBRect XCBMakeRect(XCBPoint origin, XCBSize size) {
 - (void)setConnection:(XCBConnection*)connection;
 - (XCBRect)windowRect;
 - (void)close;
+- (void)maximizeToSize:(XCBSize)size andPosition:(XCBPoint)position;
 
 @end
 
@@ -126,6 +127,11 @@ static inline XCBRect XCBMakeRect(XCBPoint origin, XCBSize size) {
 - (xcb_pixmap_t)pixmap;
 - (xcb_pixmap_t)dPixmap;
 - (void)createPixmap;
+- (void)putWindowBackgroundWithPixmap:(xcb_pixmap_t)pixmap;
+- (void)drawArea:(XCBRect)rect;
+- (XCBSize)pixmapSize;
+- (void)destroyPixmap;
+- (void)maximizeToSize:(XCBSize)size andPosition:(XCBPoint)position;
 
 @end
 
@@ -135,7 +141,7 @@ static inline XCBRect XCBMakeRect(XCBPoint origin, XCBSize size) {
 
 @property (strong, nonatomic) NSMutableDictionary *childWindows;
 @property (strong, nonatomic) XCBWindow *clientWindow;
-@property (assign, nonatomic) NSRect windowRect;
+@property (assign, nonatomic) XCBRect windowRect;
 @property (assign, nonatomic) BOOL maximized;
 @property (assign, nonatomic) NSRect savedRect; // For restoring from maximized state
 
@@ -146,8 +152,9 @@ static inline XCBRect XCBMakeRect(XCBPoint origin, XCBSize size) {
 - (BOOL)isMaximized;
 - (void)minimize;
 - (void)maximizeToSize:(XCBSize)size andPosition:(XCBPoint)position;
-- (BOOL)onScreen;
+- (XCBScreen*)onScreen;
 - (void)restoreDimensionAndPosition;
+- (void)setNeedDestroy:(BOOL)needDestroy;
 
 @end
 
@@ -216,7 +223,7 @@ static inline XCBRect XCBMakeRect(XCBPoint origin, XCBSize size) {
 - (XCBWindow*)windowForXCBId:(xcb_window_t)windowId;
 
 // Window manager operations
-- (void)registerAsWindowManager:(BOOL)register 
+- (void)registerAsWindowManager:(BOOL)registerFlag
                        screenId:(int)screenId
                 selectionWindow:(XCBWindow*)selectionWindow;
 
