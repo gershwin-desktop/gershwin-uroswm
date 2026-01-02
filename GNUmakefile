@@ -13,15 +13,15 @@ export APP_NAME
 
 $(APP_NAME)_OBJC_FILES = \
 		main.m \
-		URSHybridEventHandler.m \
-		UROSWMApplication.m \
-		URSThemeIntegration.m \
+		WindowManagerDelegate.m \
+		Application.m \
+		ThemeRenderer.m \
 		XCBWrapper.m
 
 $(APP_NAME)_HEADER_FILES = \
-		URSHybridEventHandler.h \
-		UROSWMApplication.h \
-		URSThemeIntegration.h \
+		WindowManagerDelegate.h \
+		Application.h \
+		ThemeRenderer.h \
 		XCBWrapper.h
 
 $(APP_NAME)_GUI_LIBS = -lxcb -lxcb-icccm $(shell pkg-config --libs xcb)
@@ -36,4 +36,4 @@ include $(GNUSTEP_MAKEFILES)/application.make
 # Custom target to modify Info-gnustep.plist after it's generated
 after-WindowManager-all::
 	@echo "Modifying Info-gnustep.plist to use custom principal class..."
-	@sed -i.bak 's/NSPrincipalClass = "NSApplication";/NSPrincipalClass = "UROSWMApplication";/' WindowManager.app/Resources/Info-gnustep.plist
+	@sed -i.bak 's/NSPrincipalClass = "NSApplication";/NSPrincipalClass = "Application";/' WindowManager.app/Resources/Info-gnustep.plist

@@ -9,13 +9,13 @@
 //  with NSRunLoop using file descriptor monitoring (following libs-back pattern).
 //
 
-#import "URSHybridEventHandler.h"
+#import "WindowManagerDelegate.h"
 #import "XCBWrapper.h"
 #import <xcb/xcb.h>
 #import <xcb/xcb_icccm.h>
-#import "URSThemeIntegration.h"
+#import "ThemeRenderer.h"
 
-@implementation URSHybridEventHandler
+@implementation WindowManagerDelegate
 
 @synthesize connection;
 @synthesize selectionManagerWindow;
@@ -30,7 +30,7 @@
     self = [super init];
 
     if (self == nil) {
-        NSLog(@"Unable to init URSHybridEventHandler...");
+        NSLog(@"Unable to init WindowManagerDelegate...");
         return nil;
     }
 
@@ -375,7 +375,7 @@
 
     // Apply GSTheme rendering using the working standalone method
     XCBFrame *frame = (XCBFrame*)[titlebar parentWindow];
-    BOOL success = [URSThemeIntegration renderGSThemeToWindow:frame
+    BOOL success = [ThemeRenderer renderGSThemeToWindow:frame
                                                         frame:frame
                                                         title:titlebar.windowTitle
                                                        active:YES];
@@ -444,7 +444,7 @@
         NSLog(@"GSTheme: Focus %@ for window %@", isActive ? @"gained" : @"lost", titlebar.windowTitle);
 
         // Re-render titlebar with GSTheme using standalone method (works reliably)
-        [URSThemeIntegration renderGSThemeToWindow:frame
+        [ThemeRenderer renderGSThemeToWindow:frame
                                              frame:frame
                                              title:[titlebar windowTitle]
                                             active:isActive];
@@ -468,7 +468,7 @@
 
     // Re-render with new focus state using the working standalone method
     XCBFrame *frame = (XCBFrame*)[titlebar parentWindow];
-    [URSThemeIntegration renderGSThemeToWindow:frame
+    [ThemeRenderer renderGSThemeToWindow:frame
                                          frame:frame
                                          title:titlebar.windowTitle
                                         active:active];
@@ -555,7 +555,7 @@
             XCBTitleBar *titlebar = (XCBTitleBar*)titlebarWindow;
 
             // Apply ONLY GSTheme rendering (no Cairo/XCBKit drawing)
-            BOOL success = [URSThemeIntegration renderGSThemeToWindow:frame
+            BOOL success = [ThemeRenderer renderGSThemeToWindow:frame
                                                                 frame:frame
                                                                 title:titlebar.windowTitle
                                                                active:YES];
@@ -564,7 +564,7 @@
                 NSLog(@"GSTheme-only decoration applied successfully");
 
                 // Add to managed list
-                URSThemeIntegration *integration = [URSThemeIntegration sharedInstance];
+                ThemeRenderer *integration = [ThemeRenderer sharedInstance];
                 if (![integration.managedTitlebars containsObject:titlebar]) {
                     [integration.managedTitlebars addObject:titlebar];
                 }
@@ -582,7 +582,7 @@
 
 - (void)handleTitlebarExpose:(xcb_expose_event_t*)exposeEvent {
     @try {
-        URSThemeIntegration *integration = [URSThemeIntegration sharedInstance];
+        ThemeRenderer *integration = [ThemeRenderer sharedInstance];
         if (!integration.enabled) {
             return;
         }
@@ -602,7 +602,7 @@
                     NSLog(@"Titlebar %u exposed, re-applying GSTheme", exposedWindow);
 
                     // Re-apply GSTheme rendering to override the expose redraw
-                    [URSThemeIntegration renderGSThemeToWindow:window
+                    [ThemeRenderer renderGSThemeToWindow:window
                                                          frame:frame
                                                          title:titlebar.windowTitle
                                                         active:YES];
@@ -631,7 +631,7 @@
                 NSLog(@"Fixed-size window %u detected - removing border and extra buttons", clientWindowId);
 
                 // Register as fixed-size window (for button hiding in GSTheme rendering)
-                [URSThemeIntegration registerFixedSizeWindow:clientWindowId];
+                [ThemeRenderer registerFixedSizeWindow:clientWindowId];
 
                 // Find the frame for this client window and set its border to 0
                 NSDictionary *windowsMap = [connection windowsMap];
@@ -688,14 +688,14 @@
                         NSLog(@"Found frame for client window %u, applying GSTheme to titlebar", windowId);
 
                         // Apply GSTheme rendering using standalone method (works reliably)
-                        BOOL success = [URSThemeIntegration renderGSThemeToWindow:window
+                        BOOL success = [ThemeRenderer renderGSThemeToWindow:window
                                                                            frame:frame
                                                                            title:titlebar.windowTitle
                                                                           active:YES];
 
                         if (success) {
                             // Add to managed list so we can handle expose events
-                            URSThemeIntegration *integration = [URSThemeIntegration sharedInstance];
+                            ThemeRenderer *integration = [ThemeRenderer sharedInstance];
                             if (![integration.managedTitlebars containsObject:titlebar]) {
                                 [integration.managedTitlebars addObject:titlebar];
                             }
@@ -742,7 +742,7 @@
 
                 if (frameTitle && frameTitle == titlebar) {
                     // Reapply GSTheme rendering using standalone method (works reliably)
-                    [URSThemeIntegration renderGSThemeToWindow:window
+                    [ThemeRenderer renderGSThemeToWindow:window
                                                          frame:frame
                                                          title:titlebar.windowTitle
                                                         active:YES];
@@ -762,7 +762,7 @@
 - (void)checkForNewWindows {
     @try {
         // Check if GSTheme integration is enabled
-        URSThemeIntegration *integration = [URSThemeIntegration sharedInstance];
+        ThemeRenderer *integration = [ThemeRenderer sharedInstance];
         if (!integration.enabled) {
             return; // Skip if disabled
         }
@@ -787,7 +787,7 @@
                         newTitlebarsFound++;
 
                         // Apply standalone GSTheme rendering
-                        BOOL success = [URSThemeIntegration renderGSThemeToWindow:window
+                        BOOL success = [ThemeRenderer renderGSThemeToWindow:window
                                                                              frame:frame
                                                                              title:titlebar.windowTitle
                                                                             active:YES];
@@ -877,7 +877,7 @@
             [titlebar createPixmap];
 
             // Redraw with GSTheme
-            [URSThemeIntegration renderGSThemeToWindow:frame
+            [ThemeRenderer renderGSThemeToWindow:frame
                                                  frame:frame
                                                  title:[titlebar windowTitle]
                                                 active:YES];
@@ -939,7 +939,7 @@
             [titlebar createPixmap];
 
             // Redraw with GSTheme
-            [URSThemeIntegration renderGSThemeToWindow:frame
+            [ThemeRenderer renderGSThemeToWindow:frame
                                                  frame:frame
                                                  title:[titlebar windowTitle]
                                                 active:YES];
@@ -1092,7 +1092,7 @@
                           restoredFrameRect.size.width, titleHgt);
 
                     // Redraw titlebar with GSTheme at restored size
-                    [URSThemeIntegration renderGSThemeToWindow:frame
+                    [ThemeRenderer renderGSThemeToWindow:frame
                                                          frame:frame
                                                          title:[titlebar windowTitle]
                                                         active:YES];
@@ -1129,7 +1129,7 @@
                     }
 
                     // Redraw titlebar with GSTheme at new size
-                    [URSThemeIntegration renderGSThemeToWindow:frame
+                    [ThemeRenderer renderGSThemeToWindow:frame
                                                          frame:frame
                                                          title:[titlebar windowTitle]
                                                         active:YES];
@@ -1172,7 +1172,7 @@
         NSLog(@"Rerendering titlebar '%@' as %@", titlebar.windowTitle, isActive ? @"active" : @"inactive");
 
         // Render with GSTheme
-        [URSThemeIntegration renderGSThemeToWindow:frame
+        [ThemeRenderer renderGSThemeToWindow:frame
                                              frame:frame
                                              title:[titlebar windowTitle]
                                             active:isActive];

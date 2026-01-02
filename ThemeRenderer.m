@@ -5,19 +5,19 @@
 //  Implementation of GSTheme window decoration rendering for X11 titlebars.
 //
 
-#import "URSThemeIntegration.h"
+#import "ThemeRenderer.h"
 #import "XCBWrapper.h"
 #import <objc/runtime.h>
 
-@implementation URSThemeIntegration
+@implementation ThemeRenderer
 
-static URSThemeIntegration *sharedInstance = nil;
+static ThemeRenderer *sharedInstance = nil;
 static NSMutableSet *fixedSizeWindows = nil;
 
 #pragma mark - Fixed-size window tracking
 
 + (void)initialize {
-    if (self == [URSThemeIntegration class]) {
+    if (self == [ThemeRenderer class]) {
         fixedSizeWindows = [[NSMutableSet alloc] init];
     }
 }
@@ -310,7 +310,7 @@ static NSMutableSet *fixedSizeWindows = nil;
                         title:(NSString*)title
                        active:(BOOL)isActive {
 
-    if (![[URSThemeIntegration sharedInstance] enabled] || !window || !frame) {
+    if (![[ThemeRenderer sharedInstance] enabled] || !window || !frame) {
         return NO;
     }
 
@@ -392,7 +392,7 @@ static NSMutableSet *fixedSizeWindows = nil;
         // Check if this is a fixed-size window (only show close button)
         XCBWindow *clientWindow = [frame childWindowForKey:ClientWindow];
         xcb_window_t clientWindowId = clientWindow ? [clientWindow window] : 0;
-        BOOL isFixedSize = clientWindowId && [URSThemeIntegration isFixedSizeWindow:clientWindowId];
+        BOOL isFixedSize = clientWindowId && [ThemeRenderer isFixedSizeWindow:clientWindowId];
 
         NSUInteger styleMask;
         if (isFixedSize) {
@@ -581,7 +581,7 @@ static NSMutableSet *fixedSizeWindows = nil;
                 NSLog(@"Close button color - R:%.3f G:%.3f B:%.3f A:%.3f",
                       [closeButtonColor redComponent], [closeButtonColor greenComponent],
                       [closeButtonColor blueComponent], [closeButtonColor alphaComponent]);
-                [URSThemeIntegration drawEauButtonBall:closeFrame withColor:closeButtonColor];
+                [ThemeRenderer drawEauButtonBall:closeFrame withColor:closeButtonColor];
                 NSLog(@"Standalone: Drew authentic Eau close button ball with red color");
 
                 // Draw the 12x13 image centered in the 15x15 frame
@@ -679,7 +679,7 @@ static NSMutableSet *fixedSizeWindows = nil;
                 NSLog(@"Mini button color - R:%.3f G:%.3f B:%.3f A:%.3f",
                       [miniButtonColor redComponent], [miniButtonColor greenComponent],
                       [miniButtonColor blueComponent], [miniButtonColor alphaComponent]);
-                [URSThemeIntegration drawEauButtonBall:miniFrame withColor:miniButtonColor];
+                [ThemeRenderer drawEauButtonBall:miniFrame withColor:miniButtonColor];
                 NSLog(@"Standalone: Drew authentic Eau miniaturize button ball with yellow color");
 
                 // Draw the 12x13 image centered in the 15x15 frame
@@ -740,7 +740,7 @@ static NSMutableSet *fixedSizeWindows = nil;
                     NSLog(@"Zoom button color - R:%.3f G:%.3f B:%.3f A:%.3f",
                           [zoomButtonColor redComponent], [zoomButtonColor greenComponent],
                           [zoomButtonColor blueComponent], [zoomButtonColor alphaComponent]);
-                    [URSThemeIntegration drawEauButtonBall:zoomFrame withColor:zoomButtonColor];
+                    [ThemeRenderer drawEauButtonBall:zoomFrame withColor:zoomButtonColor];
                     NSLog(@"Standalone: Drew authentic Eau zoom button ball with green color");
 
                     // Draw the image centered in the 15x15 frame (most zoom images are also 12x13)

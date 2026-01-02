@@ -25,7 +25,7 @@ typedef NS_ENUM(NSInteger, TitleBarColor) {
     TitleBarUpColor = 1
 };
 
-@interface URSThemeIntegration : NSObject
+@interface ThemeRenderer : NSObject
 
 // Singleton access
 + (instancetype)sharedInstance;

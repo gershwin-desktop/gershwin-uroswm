@@ -12,12 +12,12 @@
 #import <AppKit/AppKit.h>
 #import <Foundation/Foundation.h>
 #import "XCBWrapper.h"
-#import "URSThemeIntegration.h"
+#import "ThemeRenderer.h"
 
 // Use GNUstep's existing RunLoopEventType and RunLoopEvents protocol
 // (already defined in Foundation/NSRunLoop.h)
 
-@interface URSHybridEventHandler : NSObject <NSApplicationDelegate, RunLoopEvents>
+@interface WindowManagerDelegate : NSObject <NSApplicationDelegate, RunLoopEvents>
 
 // XCB Integration Properties (same as original URSEventHandler)
 @property (strong, nonatomic) XCBConnection* connection;

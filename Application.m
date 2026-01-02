@@ -1,19 +1,19 @@
-#import "UROSWMApplication.h"
+#import "Application.h"
 
-@implementation UROSWMApplication
+@implementation Application
 
-+ (UROSWMApplication *)sharedApplication
++ (Application *)sharedApplication
 {
-    static UROSWMApplication *sharedInstance = nil;
+    static Application *sharedInstance = nil;
 
     if (sharedInstance == nil) {
         if (NSApp == nil) {
-            sharedInstance = [[UROSWMApplication alloc] init];
+            sharedInstance = [[Application alloc] init];
             // Set ourselves as the global NSApp
             NSApp = sharedInstance;
         } else {
             // NSApp already exists, cast it to our type
-            sharedInstance = (UROSWMApplication *)NSApp;
+            sharedInstance = (Application *)NSApp;
         }
     }
 
