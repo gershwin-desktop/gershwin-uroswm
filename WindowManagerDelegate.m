@@ -891,6 +891,9 @@
             [titlebar drawArea:titlebarRect];
 
             [connection flush];
+
+            // CRITICAL: Send configure notify to client during motion
+            [frame configureClient];
         }
     } @catch (NSException *exception) {
         // Silently ignore exceptions during resize motion to avoid spam
@@ -952,7 +955,11 @@
             [titlebar drawArea:titleRect];
 
             [connection flush];
-            NSLog(@"GSTheme: Titlebar redrawn after resize");
+
+            // CRITICAL: Send configure notify to client so it knows to redraw its content
+            [frame configureClient];
+
+            NSLog(@"GSTheme: Titlebar redrawn after resize, client notified");
         }
     } @catch (NSException *exception) {
         NSLog(@"Exception in handleResizeComplete: %@", exception.reason);
@@ -1071,25 +1078,14 @@
                     NSLog(@"GSTheme: Restoring window from maximized state");
                     [frame restoreDimensionAndPosition];
 
-                    // Explicitly resize the titlebar to match restored frame width
+                    // Use coordinated resize to ensure all windows stay in sync
                     XCBRect restoredFrameRect = [frame windowRect];
-                    uint16_t titleHgt = [titlebar windowRect].size.height;
-                    XCBSize restoredTitleSize = XCBMakeSize(restoredFrameRect.size.width, titleHgt);
-                    [titlebar maximizeToSize:restoredTitleSize andPosition:XCBMakePoint(0.0, 0.0)];
-
-                    // Also resize client window
-                    if (clientWindow) {
-                        XCBSize clientSize = XCBMakeSize(restoredFrameRect.size.width,
-                                                         restoredFrameRect.size.height - titleHgt);
-                        XCBPoint clientPos = XCBMakePoint(0.0, titleHgt - 1);
-                        [clientWindow maximizeToSize:clientSize andPosition:clientPos];
-                    }
+                    [frame resizeFrame:XCBMakeSize(restoredFrameRect.size.width, restoredFrameRect.size.height)];
 
                     // Recreate the titlebar pixmap at the restored size
                     [titlebar destroyPixmap];
                     [titlebar createPixmap];
-                    NSLog(@"GSTheme: Titlebar pixmap recreated for restored size %fx%d",
-                          restoredFrameRect.size.width, titleHgt);
+                    NSLog(@"GSTheme: Titlebar pixmap recreated for restored size");
 
                     // Redraw titlebar with GSTheme at restored size
                     [ThemeRenderer renderGSThemeToWindow:frame
@@ -1111,22 +1107,13 @@
 
                     [frame maximizeToSize:size andPosition:position];
 
-                    // Resize titlebar and client window
-                    uint16_t titleHgt = [titlebar windowRect].size.height;
-                    XCBSize titleSize = XCBMakeSize([screen width], titleHgt);
-                    [titlebar maximizeToSize:titleSize andPosition:XCBMakePoint(0.0, 0.0)];
+                    // Use coordinated resize to ensure all windows stay in sync and client gets notified
+                    [frame resizeFrame:size];
 
                     // Recreate the titlebar pixmap at the new size
                     [titlebar destroyPixmap];
                     [titlebar createPixmap];
-                    NSLog(@"GSTheme: Titlebar pixmap recreated for maximized size %dx%d",
-                          [screen width], titleHgt);
-
-                    if (clientWindow) {
-                        XCBSize clientSize = XCBMakeSize([screen width], [screen height] - titleHgt);
-                        XCBPoint clientPos = XCBMakePoint(0.0, titleHgt - 1);
-                        [clientWindow maximizeToSize:clientSize andPosition:clientPos];
-                    }
+                    NSLog(@"GSTheme: Titlebar pixmap recreated for maximized size");
 
                     // Redraw titlebar with GSTheme at new size
                     [ThemeRenderer renderGSThemeToWindow:frame

@@ -383,7 +383,111 @@ NSString * const ClientWindow = @"ClientWindow";
     // Simple implementation - could be extended to track destroy state
     if (needDestroy) {
         NSLog(@"XCBFrame: Window %u marked for destruction", self.window);
+        // Actually destroy the frame window
+        if (self.window != XCB_NONE && self.connection) {
+            xcb_destroy_window([self.connection connection], self.window);
+            [self.connection flush];
+            NSLog(@"XCBFrame: Destroyed frame window %u", self.window);
+        }
     }
+}
+
+- (void)configureClient {
+    // Send synthetic configure notify event to client so it knows the window size changed
+    // This is critical for applications like xterm to resize their content
+    XCBWindow *clientWindow = [self childWindowForKey:ClientWindow];
+    XCBWindow *titlebarWindow = [self childWindowForKey:TitleBar];
+
+    if (!clientWindow || !titlebarWindow) {
+        NSLog(@"XCBFrame: configureClient - missing client or titlebar window");
+        return;
+    }
+
+    xcb_configure_notify_event_t event;
+    memset(&event, 0, sizeof(event));
+
+    // Get current frame rect and titlebar height
+    XCBRect frameRect = self.windowRect;
+    uint16_t titlebarHeight = 22; // Default titlebar height
+
+    if ([titlebarWindow respondsToSelector:@selector(windowRect)]) {
+        titlebarHeight = [titlebarWindow windowRect].size.height;
+    }
+
+    // Synthetic event - coordinates must be in root space
+    event.response_type = XCB_CONFIGURE_NOTIFY;
+    event.event = clientWindow.window;
+    event.window = clientWindow.window;
+    event.x = frameRect.origin.x;
+    event.y = frameRect.origin.y + titlebarHeight;
+    event.width = frameRect.size.width;
+    event.height = frameRect.size.height - titlebarHeight;
+    event.border_width = 0;
+    event.above_sibling = XCB_NONE;
+    event.override_redirect = 0;
+    event.sequence = 0;
+
+    // Send the synthetic event to the client
+    [self.connection sendEvent:(const char*)&event toClient:clientWindow propagate:NO];
+
+    // Update client window's internal rect
+    XCBRect clientRect = XCBMakeRect(
+        XCBMakePoint(0, titlebarHeight), // Relative to frame
+        XCBMakeSize(frameRect.size.width, frameRect.size.height - titlebarHeight)
+    );
+    clientWindow.windowRect = clientRect;
+
+    NSLog(@"XCBFrame: Sent configure notify to client window %u (size: %dx%d)",
+          clientWindow.window, event.width, event.height);
+}
+
+- (void)resizeFrame:(XCBSize)newSize {
+    // Coordinated resize of frame, titlebar, and client window
+    if (self.window == XCB_NONE || !self.connection) {
+        return;
+    }
+
+    XCBWindow *clientWindow = [self childWindowForKey:ClientWindow];
+    XCBWindow *titlebarWindow = [self childWindowForKey:TitleBar];
+
+    if (!clientWindow || !titlebarWindow) {
+        NSLog(@"XCBFrame: resizeFrame - missing child windows");
+        return;
+    }
+
+    uint16_t titlebarHeight = 22;
+    if ([titlebarWindow respondsToSelector:@selector(windowRect)]) {
+        titlebarHeight = [titlebarWindow windowRect].size.height;
+    }
+
+    // Resize frame window
+    uint32_t frameValues[2] = {(uint32_t)newSize.width, (uint32_t)newSize.height};
+    xcb_configure_window([self.connection connection], self.window,
+                        XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT, frameValues);
+
+    // Resize titlebar window
+    uint32_t titlebarValues[2] = {(uint32_t)newSize.width, titlebarHeight};
+    xcb_configure_window([self.connection connection], titlebarWindow.window,
+                        XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT, titlebarValues);
+
+    // Resize client window
+    uint32_t clientValues[2] = {(uint32_t)newSize.width, (uint32_t)(newSize.height - titlebarHeight)};
+    xcb_configure_window([self.connection connection], clientWindow.window,
+                        XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT, clientValues);
+
+    // Update internal rects
+    self.windowRect = XCBMakeRect(self.windowRect.origin, newSize);
+    titlebarWindow.windowRect = XCBMakeRect(XCBMakePoint(0, 0), XCBMakeSize(newSize.width, titlebarHeight));
+
+    [self.connection flush];
+
+    // Critical: Send configure notify to client so it knows to redraw its content
+    [self configureClient];
+
+    NSLog(@"XCBFrame: Coordinated resize to %dx%d (titlebar: %dx%d, client: %dx%d)",
+          (int)newSize.width, (int)newSize.height,
+          (int)newSize.width, titlebarHeight,
+          (int)newSize.width, (int)(newSize.height - titlebarHeight));
 }
 
 @end
@@ -962,11 +1066,50 @@ static XCBConnection *sharedConnection = nil;
 }
 
 - (void)handleDestroyNotify:(xcb_destroy_notify_event_t*)event {
-    // Minimal implementation - clean up
+    // Proper cleanup like the original XCBKit implementation
     NSLog(@"Destroy notify for window %u", event->window);
-    
+
+    XCBWindow *window = [self windowForXCBId:event->window];
+    XCBFrame *frameWindow = nil;
+    XCBTitleBar *titleBarWindow = nil;
+    XCBWindow *clientWindow = nil;
+
+    if ([window isKindOfClass:[XCBFrame class]]) {
+        frameWindow = (XCBFrame*)window;
+        titleBarWindow = (XCBTitleBar*)[frameWindow childWindowForKey:TitleBar];
+        clientWindow = [frameWindow childWindowForKey:ClientWindow];
+    } else if ([window isKindOfClass:[XCBWindow class]]) {
+        if ([[window parentWindow] isKindOfClass:[XCBFrame class]]) {
+            // This is a client window
+            frameWindow = (XCBFrame*)[window parentWindow];
+            clientWindow = window;
+            titleBarWindow = (XCBTitleBar*)[frameWindow childWindowForKey:TitleBar];
+            [frameWindow setNeedDestroy:YES]; // This will destroy the frame
+        }
+    }
+
+    // Unregister all related windows
+    if (frameWindow) {
+        NSString *frameKey = [NSString stringWithFormat:@"%u", frameWindow.window];
+        [self.windowsMap removeObjectForKey:frameKey];
+        NSLog(@"Unregistered frame window %u", frameWindow.window);
+    }
+    if (titleBarWindow) {
+        NSString *titleKey = [NSString stringWithFormat:@"%u", titleBarWindow.window];
+        [self.windowsMap removeObjectForKey:titleKey];
+        NSLog(@"Unregistered titlebar window %u", titleBarWindow.window);
+    }
+    if (clientWindow) {
+        NSString *clientKey = [NSString stringWithFormat:@"%u", clientWindow.window];
+        [self.windowsMap removeObjectForKey:clientKey];
+        NSLog(@"Unregistered client window %u", clientWindow.window);
+    }
+
+    // Remove the destroyed window itself
     NSString *key = [NSString stringWithFormat:@"%u", event->window];
     [self.windowsMap removeObjectForKey:key];
+
+    NSLog(@"XCBConnection: Cleaned up destroyed window %u and associated windows", event->window);
 }
 
 - (void)handleConfigureRequest:(xcb_configure_request_event_t*)event {
@@ -1103,8 +1246,25 @@ static XCBConnection *sharedConnection = nil;
     
     // Clean up
     free(convertedPixels);
-    
+
     return YES;
+}
+
+- (void)sendEvent:(const char*)event toClient:(XCBWindow*)clientWindow propagate:(BOOL)propagate {
+    // Send synthetic event to client window - critical for notifying apps of window changes
+    if (!clientWindow || clientWindow.window == XCB_NONE) {
+        NSLog(@"XCBConnection: Cannot send event to invalid client window");
+        return;
+    }
+
+    xcb_send_event(self.connection,
+                   propagate ? 1 : 0,           // propagate flag
+                   clientWindow.window,         // destination window
+                   XCB_EVENT_MASK_STRUCTURE_NOTIFY, // event mask for configure notify
+                   event);                      // event data
+
+    [self flush];
+    NSLog(@"XCBConnection: Sent synthetic event to client window %u", clientWindow.window);
 }
 
 @end

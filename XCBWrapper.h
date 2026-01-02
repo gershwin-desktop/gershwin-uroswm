@@ -159,6 +159,8 @@ static inline XCBRect XCBMakeRect(XCBPoint origin, XCBSize size) {
 - (XCBScreen*)onScreen;
 - (void)restoreDimensionAndPosition;
 - (void)setNeedDestroy:(BOOL)needDestroy;
+- (void)configureClient;
+- (void)resizeFrame:(XCBSize)newSize;
 
 @end
 
@@ -250,6 +252,9 @@ static inline XCBRect XCBMakeRect(XCBPoint origin, XCBSize size) {
 - (void)handleConfigureNotify:(xcb_configure_notify_event_t*)event;
 - (void)handlePropertyNotify:(xcb_property_notify_event_t*)event;
 - (void)handleClientMessage:(xcb_client_message_event_t*)event;
+
+// Client notification
+- (void)sendEvent:(const char*)event toClient:(XCBWindow*)clientWindow propagate:(BOOL)propagate;
 
 // Utility function to copy NSBitmapImageRep data to XCB pixmap
 // This replaces Cairo functionality with direct XCB operations
