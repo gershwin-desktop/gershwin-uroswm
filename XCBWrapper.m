@@ -924,25 +924,58 @@ static XCBConnection *sharedConnection = nil;
 - (void)handleMapRequest:(xcb_map_request_event_t*)event {
     // This is a critical WM function - a client wants to map a window
     NSLog(@"Map request for window %u", event->window);
-    
+
+    // Check if this window is already managed
+    XCBWindow *existingWindow = [self windowForXCBId:event->window];
+    if (existingWindow) {
+        NSLog(@"Window %u already managed, just mapping it", event->window);
+        [self mapWindow:existingWindow];
+        return;
+    }
+
+    // Get window attributes to check override_redirect
+    xcb_get_window_attributes_cookie_t attr_cookie = xcb_get_window_attributes(self.connection, event->window);
+    xcb_get_window_attributes_reply_t *attr_reply = xcb_get_window_attributes_reply(self.connection, attr_cookie, NULL);
+
+    if (attr_reply) {
+        if (attr_reply->override_redirect) {
+            // Override redirect windows (menus, tooltips, popups) should not be managed
+            NSLog(@"Window %u has override_redirect=true, mapping without frame", event->window);
+            xcb_map_window(self.connection, event->window);
+            free(attr_reply);
+            return;
+        }
+        free(attr_reply);
+    }
+
     // Get window geometry
     xcb_get_geometry_cookie_t geom_cookie = xcb_get_geometry(self.connection, event->window);
     xcb_get_geometry_reply_t *geom_reply = xcb_get_geometry_reply(self.connection, geom_cookie, NULL);
-    
+
     if (!geom_reply) {
         // If we can't get geometry, just map it
         xcb_map_window(self.connection, event->window);
         return;
     }
-    
+
     // Check if this window should be managed (has WM_TRANSIENT_FOR = unmanaged)
     xcb_get_property_cookie_t trans_cookie = xcb_icccm_get_wm_transient_for(self.connection, event->window);
     xcb_window_t transient_for = XCB_NONE;
     BOOL is_transient = (xcb_icccm_get_wm_transient_for_reply(self.connection, trans_cookie, &transient_for, NULL) == 1);
-    
+
     if (is_transient) {
         // Transient windows (dialogs, etc.) don't get frames
         NSLog(@"Window %u is transient, mapping without frame", event->window);
+        xcb_map_window(self.connection, event->window);
+        free(geom_reply);
+        return;
+    }
+
+    // Check window type properties to filter special windows
+    BOOL shouldDecorate = [self shouldDecorateWindow:event->window];
+    if (!shouldDecorate) {
+        // Special window types (dock, menu, notification, etc.) don't get frames
+        NSLog(@"Window %u is special type, mapping without frame", event->window);
         xcb_map_window(self.connection, event->window);
         free(geom_reply);
         return;
@@ -1265,6 +1298,85 @@ static XCBConnection *sharedConnection = nil;
 
     [self flush];
     NSLog(@"XCBConnection: Sent synthetic event to client window %u", clientWindow.window);
+}
+
+- (BOOL)shouldDecorateWindow:(xcb_window_t)window {
+    // Check _NET_WM_WINDOW_TYPE to determine if window should get decorations
+    // Based on original XCBKit logic (lines 705-749)
+
+    // Get _NET_WM_WINDOW_TYPE property
+    xcb_atom_t net_wm_window_type = [self getAtom:"_NET_WM_WINDOW_TYPE"];
+    if (net_wm_window_type == XCB_ATOM_NONE) {
+        // If we can't get the atom, assume it's a normal window that should be decorated
+        return YES;
+    }
+
+    xcb_get_property_cookie_t prop_cookie = xcb_get_property(
+        self.connection, 0, window, net_wm_window_type, XCB_ATOM_ATOM, 0, UINT32_MAX);
+    xcb_get_property_reply_t *prop_reply = xcb_get_property_reply(self.connection, prop_cookie, NULL);
+
+    if (!prop_reply) {
+        // No window type property, assume normal window
+        return YES;
+    }
+
+    if (xcb_get_property_value_length(prop_reply) == 0) {
+        // Empty property, assume normal window
+        free(prop_reply);
+        return YES;
+    }
+
+    // Get the window type atom
+    xcb_atom_t *window_type = (xcb_atom_t*)xcb_get_property_value(prop_reply);
+    xcb_atom_t type = *window_type;
+    free(prop_reply);
+
+    // Get atoms for special window types that shouldn't be decorated
+    xcb_atom_t dock_atom = [self getAtom:"_NET_WM_WINDOW_TYPE_DOCK"];
+    xcb_atom_t menu_atom = [self getAtom:"_NET_WM_WINDOW_TYPE_MENU"];
+    xcb_atom_t popup_menu_atom = [self getAtom:"_NET_WM_WINDOW_TYPE_POPUP_MENU"];
+    xcb_atom_t dropdown_menu_atom = [self getAtom:"_NET_WM_WINDOW_TYPE_DROPDOWN_MENU"];
+    xcb_atom_t tooltip_atom = [self getAtom:"_NET_WM_WINDOW_TYPE_TOOLTIP"];
+    xcb_atom_t notification_atom = [self getAtom:"_NET_WM_WINDOW_TYPE_NOTIFICATION"];
+    xcb_atom_t splash_atom = [self getAtom:"_NET_WM_WINDOW_TYPE_SPLASH"];
+
+    // Check if this is a special window type that shouldn't be decorated
+    if (type == dock_atom) {
+        NSLog(@"Window %u is dock type, no decoration", window);
+        return NO;
+    }
+    if (type == menu_atom || type == popup_menu_atom || type == dropdown_menu_atom) {
+        NSLog(@"Window %u is menu type, no decoration", window);
+        return NO;
+    }
+    if (type == tooltip_atom) {
+        NSLog(@"Window %u is tooltip type, no decoration", window);
+        return NO;
+    }
+    if (type == notification_atom) {
+        NSLog(@"Window %u is notification type, no decoration", window);
+        return NO;
+    }
+    if (type == splash_atom) {
+        NSLog(@"Window %u is splash screen type, no decoration", window);
+        return NO;
+    }
+
+    // Default: normal windows get decorated
+    NSLog(@"Window %u is normal type, will be decorated", window);
+    return YES;
+}
+
+- (xcb_atom_t)getAtom:(const char*)name {
+    // Helper method to get atom by name
+    xcb_intern_atom_cookie_t cookie = xcb_intern_atom(self.connection, 0, strlen(name), name);
+    xcb_intern_atom_reply_t *reply = xcb_intern_atom_reply(self.connection, cookie, NULL);
+    if (reply) {
+        xcb_atom_t atom = reply->atom;
+        free(reply);
+        return atom;
+    }
+    return XCB_ATOM_NONE;
 }
 
 @end

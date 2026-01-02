@@ -495,10 +495,46 @@
     @try {
         NSLog(@"Intercepting map request for window %u - using GSTheme-only decoration", mapRequestEvent->window);
 
-        // Let XCBConnection handle the map request BUT don't let it decorate with XCBKit
-        // We need to duplicate XCBConnection's handleMapRequest logic but skip the decorateClientWindow call
-
         xcb_window_t requestWindow = mapRequestEvent->window;
+
+        // CRITICAL: Apply same filtering as XCBConnection to avoid decorating menus/popups/etc
+        XCBWindow *existingWindow = [connection windowForXCBId:requestWindow];
+        if (existingWindow) {
+            NSLog(@"Window %u already managed, just mapping it", requestWindow);
+            [connection mapWindow:existingWindow];
+            return;
+        }
+
+        // Check override_redirect
+        xcb_get_window_attributes_cookie_t attr_cookie = xcb_get_window_attributes([connection connection], requestWindow);
+        xcb_get_window_attributes_reply_t *attr_reply = xcb_get_window_attributes_reply([connection connection], attr_cookie, NULL);
+        if (attr_reply) {
+            if (attr_reply->override_redirect) {
+                NSLog(@"Window %u has override_redirect=true, mapping without GSTheme frame", requestWindow);
+                xcb_map_window([connection connection], requestWindow);
+                free(attr_reply);
+                return;
+            }
+            free(attr_reply);
+        }
+
+        // Check transient windows
+        xcb_get_property_cookie_t trans_cookie = xcb_icccm_get_wm_transient_for([connection connection], requestWindow);
+        xcb_window_t transient_for = XCB_NONE;
+        BOOL is_transient = (xcb_icccm_get_wm_transient_for_reply([connection connection], trans_cookie, &transient_for, NULL) == 1);
+        if (is_transient) {
+            NSLog(@"Window %u is transient, mapping without GSTheme frame", requestWindow);
+            xcb_map_window([connection connection], requestWindow);
+            return;
+        }
+
+        // Check window types
+        BOOL shouldDecorate = [connection shouldDecorateWindow:requestWindow];
+        if (!shouldDecorate) {
+            NSLog(@"Window %u is special type, mapping without GSTheme frame", requestWindow);
+            xcb_map_window([connection connection], requestWindow);
+            return;
+        }
 
         // Get window geometry
         xcb_get_geometry_cookie_t geom_cookie = xcb_get_geometry([connection connection], requestWindow);

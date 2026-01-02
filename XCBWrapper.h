@@ -256,6 +256,9 @@ static inline XCBRect XCBMakeRect(XCBPoint origin, XCBSize size) {
 // Client notification
 - (void)sendEvent:(const char*)event toClient:(XCBWindow*)clientWindow propagate:(BOOL)propagate;
 
+// Window filtering
+- (BOOL)shouldDecorateWindow:(xcb_window_t)window;
+
 // Utility function to copy NSBitmapImageRep data to XCB pixmap
 // This replaces Cairo functionality with direct XCB operations
 + (BOOL)copyBitmapToPixmap:(NSBitmapImageRep*)bitmap
