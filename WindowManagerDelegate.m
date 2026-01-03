@@ -13,7 +13,6 @@
 #import "XCBWrapper.h"
 #import <xcb/xcb.h>
 #import <xcb/xcb_icccm.h>
-#import "ThemeRenderer.h"
 
 @implementation WindowManagerDelegate
 
