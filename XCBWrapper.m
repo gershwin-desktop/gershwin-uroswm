@@ -1024,15 +1024,39 @@ static XCBConnection *sharedConnection = nil;
         return;
     }
 
-    // Check window type properties to filter special windows
-    NSLog(@"Checking window type for window %u", event->window);
-    BOOL shouldDecorate = [self shouldDecorateWindow:event->window];
-    if (!shouldDecorate) {
+    // Basic filtering: check for special window types that never get frames
+    NSLog(@"Checking basic window filtering for window %u", event->window);
+    BOOL shouldAttemptDecoration = [self shouldDecorateWindow:event->window];
+    if (!shouldAttemptDecoration) {
         // Special window types (dock, menu, notification, etc.) don't get frames
         NSLog(@"Window %u is special type, mapping without frame", event->window);
         xcb_map_window(self.connection, event->window);
         free(geom_reply);
         return;
+    }
+
+    // Check if this is a GNUstep window before creating any frame
+    BOOL isGNUStepWindow = [ThemeRenderer isGNUStepWindow:event->window connection:self];
+    if (isGNUStepWindow) {
+        // Check GNUstep decoration preferences
+        NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+        NSString *backHandlesDecorations = [defaults stringForKey:@"GSBackHandlesWindowDecorations"];
+        BOOL gnustepHandlesDecorations = NO;
+
+        if (backHandlesDecorations) {
+            gnustepHandlesDecorations = ![backHandlesDecorations boolValue]; // NO means GNUstep decorates
+        } else {
+            gnustepHandlesDecorations = YES; // Default: GNUstep handles decorations
+        }
+
+        if (gnustepHandlesDecorations) {
+            NSLog(@"GNUstep window %u: GNUstep handles decorations, mapping directly without frame", event->window);
+            xcb_map_window(self.connection, event->window);
+            free(geom_reply);
+            return;
+        }
+
+        NSLog(@"GNUstep window %u: WM should handle decorations, proceeding with frame", event->window);
     }
     
     // Create or get client window object
@@ -1139,15 +1163,32 @@ static XCBConnection *sharedConnection = nil;
                        borderWidth,
                        titlebarHeight);
     
-    // Map frame, titlebar, and client
-    xcb_map_window(self.connection, titlebar.window);
-    xcb_map_window(self.connection, event->window);
-    xcb_map_window(self.connection, frame.window);
-
     // Hide borders for windows with fixed sizes (like info panels and logout)
     [self adjustBorderForFixedSizeWindow:event->window];
 
-    // GSTheme will be applied by the periodic timer in ThemeRenderer
+    // Apply GSTheme decoration (we only reach here for windows that should be decorated)
+    NSString *windowTitle = @""; // TODO: Get actual window title if needed
+    BOOL themeSuccess = [ThemeRenderer renderGSThemeToWindow:clientWindow
+                                                      frame:frame
+                                                      title:windowTitle
+                                                     active:YES];
+
+    if (!themeSuccess) {
+        // This shouldn't happen since we pre-checked, but handle gracefully
+        NSLog(@"Unexpected: GSTheme declined to render window %u after pre-check passed", event->window);
+        xcb_destroy_window(self.connection, titlebar.window);
+        xcb_destroy_window(self.connection, frame.window);
+        xcb_map_window(self.connection, event->window);
+        free(geom_reply);
+        return;
+    }
+
+    NSLog(@"GSTheme successfully rendered window %u", event->window);
+
+    // Map frame, titlebar, and client now that theming succeeded
+    xcb_map_window(self.connection, titlebar.window);
+    xcb_map_window(self.connection, event->window);
+    xcb_map_window(self.connection, frame.window);
 
     free(geom_reply);
 }

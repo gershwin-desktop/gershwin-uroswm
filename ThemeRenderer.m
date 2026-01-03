@@ -42,6 +42,69 @@ static NSMutableSet *fixedSizeWindows = nil;
     }
 }
 
++ (BOOL)isGNUStepWindow:(xcb_window_t)windowId connection:(XCBConnection*)connection {
+    if (!connection) return NO;
+
+    // Method 1: Check for _GNUSTEP_WM_ATTR property
+    xcb_atom_t gnustep_attr = XCB_ATOM_NONE;
+    xcb_intern_atom_cookie_t atom_cookie = xcb_intern_atom(connection.connection, 0, 16, "_GNUSTEP_WM_ATTR");
+    xcb_intern_atom_reply_t *atom_reply = xcb_intern_atom_reply(connection.connection, atom_cookie, NULL);
+    if (atom_reply) {
+        gnustep_attr = atom_reply->atom;
+        free(atom_reply);
+    }
+
+    if (gnustep_attr != XCB_ATOM_NONE) {
+        xcb_get_property_cookie_t prop_cookie = xcb_get_property(connection.connection, 0, windowId,
+                                                                gnustep_attr, XCB_ATOM_ANY, 0, UINT32_MAX);
+        xcb_get_property_reply_t *prop_reply = xcb_get_property_reply(connection.connection, prop_cookie, NULL);
+
+        if (prop_reply && xcb_get_property_value_length(prop_reply) > 0) {
+            NSLog(@"Window %u has _GNUSTEP_WM_ATTR property - confirmed GNUstep window", windowId);
+            free(prop_reply);
+            return YES;
+        }
+        if (prop_reply) free(prop_reply);
+    }
+
+    // Method 2: Check WM_CLASS for GNUstep applications
+    xcb_get_property_cookie_t class_cookie = xcb_icccm_get_wm_class(connection.connection, windowId);
+    xcb_icccm_get_wm_class_reply_t class_reply;
+    if (xcb_icccm_get_wm_class_reply(connection.connection, class_cookie, &class_reply, NULL)) {
+        NSString *instance = [NSString stringWithUTF8String:class_reply.instance_name];
+        NSString *class = [NSString stringWithUTF8String:class_reply.class_name];
+
+        // Check for known GNUstep application patterns
+        NSArray *gnustepPatterns = @[@"GWorkspace", @"SystemPreferences", @"Gorm", @"ProjectCenter",
+                                   @"TextEdit", @"Calculator", @"Calendar", @"StepChat", @"Ink",
+                                   @"TimeMon", @"Terminal", @"GNUMail", @"Price"];
+
+        BOOL isGNUStepApp = NO;
+        for (NSString *pattern in gnustepPatterns) {
+            if ([instance containsString:pattern] || [class containsString:pattern]) {
+                isGNUStepApp = YES;
+                break;
+            }
+        }
+
+        NSLog(@"Window %u WM_CLASS: instance='%@', class='%@' -> %@", windowId, instance, class,
+              isGNUStepApp ? @"GNUstep app" : @"non-GNUstep app");
+
+        xcb_icccm_get_wm_class_reply_wipe(&class_reply);
+        return isGNUStepApp;
+    }
+
+    // Method 3: Check if running as part of current GNUstep application
+    // If this window manager is itself a GNUstep app, we might be dealing with our own windows
+    if ([[NSProcessInfo processInfo].processName hasPrefix:@"Window"]) {
+        NSLog(@"Window %u: Unknown origin, assuming non-GNUstep for safety", windowId);
+        return NO;
+    }
+
+    NSLog(@"Window %u: Could not determine if GNUstep window, assuming non-GNUstep", windowId);
+    return NO;
+}
+
 // Method to draw authentic Eau button balls using the exact gradient logic from EauWindowButtonCell
 + (void)drawEauButtonBall:(NSRect)frame withColor:(NSColor*)baseColor {
     // Replicate EauWindowButtonCell drawBallWithRect logic exactly
@@ -313,6 +376,86 @@ static NSMutableSet *fixedSizeWindows = nil;
     if (![[ThemeRenderer sharedInstance] enabled] || !window || !frame) {
         return NO;
     }
+
+    // First check if this is actually a GNUstep window
+    BOOL isGNUStepWindow = [self isGNUStepWindow:[window window] connection:[window connection]];
+
+    if (isGNUStepWindow) {
+        // Check GNUstep decoration preferences only for GNUstep windows
+        NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+
+        // GSBackHandlesWindowDecorations: NO = GNUstep decorates, YES = WM decorates
+        NSString *backHandlesDecorations = [defaults stringForKey:@"GSBackHandlesWindowDecorations"];
+        BOOL gnustepHandlesDecorations = NO;
+
+        if (backHandlesDecorations) {
+            // Handle both string and boolean values
+            if ([backHandlesDecorations isKindOfClass:[NSString class]]) {
+                gnustepHandlesDecorations = ![backHandlesDecorations boolValue]; // NO means GNUstep decorates
+            } else {
+                gnustepHandlesDecorations = ![defaults boolForKey:@"GSBackHandlesWindowDecorations"];
+            }
+        } else {
+            // Default behavior if key is not set - assume GNUstep handles decorations
+            gnustepHandlesDecorations = YES;
+        }
+
+        if (gnustepHandlesDecorations) {
+            NSLog(@"GNUstep window %u: GNUstep configured to handle decorations (GSBackHandlesWindowDecorations=%@), declining to render", [window window], backHandlesDecorations);
+            return NO;
+        }
+
+        NSLog(@"GNUstep window %u: GNUstep configured to let WM handle decorations (GSBackHandlesWindowDecorations=%@), proceeding", [window window], backHandlesDecorations);
+    } else {
+        NSLog(@"Non-GNUstep window %u: proceeding with window manager decoration", [window window]);
+    }
+
+    // Check if this GNUstep window already has decorations by examining its parent hierarchy
+    // Only do this check for GNUstep windows, as other apps may have legitimate parent windows
+    if (isGNUStepWindow) {
+        XCBConnection *connection = [window connection];
+        if (connection) {
+            xcb_query_tree_cookie_t tree_cookie = xcb_query_tree(connection.connection, [window window]);
+            xcb_query_tree_reply_t *tree_reply = xcb_query_tree_reply(connection.connection, tree_cookie, NULL);
+
+            if (tree_reply) {
+                xcb_window_t parent = tree_reply->parent;
+                xcb_window_t root = tree_reply->root;
+                free(tree_reply);
+
+                // If the window's parent is not the root window, it might already be decorated
+                if (parent != root) {
+                    NSLog(@"GNUstep window %u has non-root parent %u (root=%u), likely already decorated by GNUstep",
+                          [window window], parent, root);
+
+                    // Get parent geometry to check if it's larger than client (indicating decoration)
+                    xcb_get_geometry_cookie_t parent_geom_cookie = xcb_get_geometry(connection.connection, parent);
+                    xcb_get_geometry_cookie_t client_geom_cookie = xcb_get_geometry(connection.connection, [window window]);
+
+                    xcb_get_geometry_reply_t *parent_geom = xcb_get_geometry_reply(connection.connection, parent_geom_cookie, NULL);
+                    xcb_get_geometry_reply_t *client_geom = xcb_get_geometry_reply(connection.connection, client_geom_cookie, NULL);
+
+                    if (parent_geom && client_geom) {
+                        // If parent is larger than client, it's likely a decoration frame
+                        if (parent_geom->width > client_geom->width || parent_geom->height > client_geom->height) {
+                            NSLog(@"GNUstep window %u parent (%ux%u) is larger than client (%ux%u), declining to double-decorate",
+                                  [window window], parent_geom->width, parent_geom->height,
+                                  client_geom->width, client_geom->height);
+
+                            if (parent_geom) free(parent_geom);
+                            if (client_geom) free(client_geom);
+                            return NO;
+                        }
+
+                        if (parent_geom) free(parent_geom);
+                        if (client_geom) free(client_geom);
+                    }
+                }
+            }
+        }
+    }
+
+    NSLog(@"Proceeding with window manager decoration for window %u", [window window]);
 
     GSTheme *theme = [self currentTheme];
     if (!theme) {
@@ -919,55 +1062,11 @@ static NSMutableSet *fixedSizeWindows = nil;
             return; // Skip if disabled
         }
 
-        // Check all windows in the connection for new frames/titlebars
-        NSDictionary *windowsMap = connection.windowsMap;
-        NSUInteger newTitlebarsFound = 0;
+        // NOTE: Decoration decisions are now handled in handleMapRequest in XCBWrapper.m
+        // This periodic timer is disabled to prevent duplicate decoration attempts.
+        // The map request handler already calls renderGSThemeToWindow with proper GNUstep checking.
 
-        for (NSString *windowId in windowsMap) {
-            XCBWindow *window = [windowsMap objectForKey:windowId];
-
-            // Look for XCBFrame objects (which contain titlebars)
-            if (window && [window isKindOfClass:[XCBFrame class]]) {
-                XCBFrame *frame = (XCBFrame*)window;
-                XCBWindow *titlebarWindow = [frame childWindowForKey:TitleBar];
-
-                if (titlebarWindow && [titlebarWindow isKindOfClass:[XCBTitleBar class]]) {
-                    XCBTitleBar *titlebar = (XCBTitleBar*)titlebarWindow;
-
-                    // Check if we've already processed this titlebar
-                    if (![self.managedTitlebars containsObject:titlebar]) {
-                        // Check if the client window should be decorated
-                        XCBWindow *clientWindow = [frame childWindowForKey:ClientWindow];
-                        if (clientWindow) {
-                            BOOL shouldDecorate = [connection shouldDecorateWindow:[clientWindow window]];
-                            if (!shouldDecorate) {
-                                NSLog(@"Periodic check: Skipping decoration for special window type: %u", [clientWindow window]);
-                                continue;
-                            }
-                        }
-
-                        newTitlebarsFound++;
-
-                        // Apply standalone GSTheme rendering
-                        BOOL success = [ThemeRenderer renderGSThemeToWindow:window
-                                                                             frame:frame
-                                                                             title:titlebar.windowTitle
-                                                                            active:YES];
-
-                        if (success) {
-                            // Add to managed list only if successful
-                            [self.managedTitlebars addObject:titlebar];
-                            NSLog(@"Applied GSTheme to new titlebar: %@", titlebar.windowTitle ?: @"(untitled)");
-                        }
-                    }
-                }
-            }
-        }
-
-        // Only log if we found new titlebars
-        if (newTitlebarsFound > 0) {
-            NSLog(@"GSTheme periodic check: processed %lu new titlebars", (unsigned long)newTitlebarsFound);
-        }
+        NSLog(@"GSTheme periodic timer disabled - decoration handled by map request handler");
 
     } @catch (NSException *exception) {
         NSLog(@"Exception in periodic window check: %@", exception.reason);

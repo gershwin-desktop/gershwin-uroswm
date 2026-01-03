@@ -55,6 +55,9 @@ typedef NS_ENUM(NSInteger, TitleBarColor) {
 + (void)unregisterFixedSizeWindow:(xcb_window_t)windowId;
 + (BOOL)isFixedSizeWindow:(xcb_window_t)windowId;
 
+// GNUstep window detection
++ (BOOL)isGNUStepWindow:(xcb_window_t)windowId connection:(XCBConnection*)connection;
+
 // Pure theming methods (moved from XCBConnection)
 - (GSThemeTitleBarButton)buttonAtPoint:(NSPoint)point forTitlebar:(XCBTitleBar*)titlebar;
 - (void)rerenderTitlebarForFrame:(XCBFrame*)frame active:(BOOL)isActive;
