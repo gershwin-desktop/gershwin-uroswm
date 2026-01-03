@@ -936,6 +936,16 @@ static NSMutableSet *fixedSizeWindows = nil;
 
                     // Check if we've already processed this titlebar
                     if (![self.managedTitlebars containsObject:titlebar]) {
+                        // Check if the client window should be decorated
+                        XCBWindow *clientWindow = [frame childWindowForKey:ClientWindow];
+                        if (clientWindow) {
+                            BOOL shouldDecorate = [connection shouldDecorateWindow:[clientWindow window]];
+                            if (!shouldDecorate) {
+                                NSLog(@"Periodic check: Skipping decoration for special window type: %u", [clientWindow window]);
+                                continue;
+                            }
+                        }
+
                         newTitlebarsFound++;
 
                         // Apply standalone GSTheme rendering

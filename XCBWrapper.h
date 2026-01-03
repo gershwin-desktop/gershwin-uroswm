@@ -259,11 +259,11 @@ static inline XCBRect XCBMakeRect(XCBPoint origin, XCBSize size) {
 
 // Window filtering
 - (BOOL)shouldDecorateWindow:(xcb_window_t)window;
+- (BOOL)shouldDecorateTransientWindow:(xcb_window_t)window;
 
 // GSTheme Integration Methods (XCB-specific integration)
 - (void)applyFocusChangeToWindow:(xcb_window_t)windowId isActive:(BOOL)isActive;
 - (BOOL)handleTitlebarButtonPress:(xcb_button_press_event_t*)pressEvent;
-- (void)applyGSThemeToRecentlyMappedWindow:(NSNumber*)windowIdNumber;
 - (void)adjustBorderForFixedSizeWindow:(xcb_window_t)clientWindowId;
 - (void)setupPeriodicThemeIntegration;
 - (void)clearTitlebarBackgroundBeforeResize:(xcb_motion_notify_event_t*)motionEvent;

@@ -1025,6 +1025,7 @@ static XCBConnection *sharedConnection = nil;
     }
 
     // Check window type properties to filter special windows
+    NSLog(@"Checking window type for window %u", event->window);
     BOOL shouldDecorate = [self shouldDecorateWindow:event->window];
     if (!shouldDecorate) {
         // Special window types (dock, menu, notification, etc.) don't get frames
@@ -1146,8 +1147,7 @@ static XCBConnection *sharedConnection = nil;
     // Hide borders for windows with fixed sizes (like info panels and logout)
     [self adjustBorderForFixedSizeWindow:event->window];
 
-    // Apply GSTheme immediately with no delay
-    [self applyGSThemeToRecentlyMappedWindow:[NSNumber numberWithUnsignedInt:event->window]];
+    // GSTheme will be applied by the periodic timer in ThemeRenderer
 
     free(geom_reply);
 }
@@ -1363,10 +1363,13 @@ static XCBConnection *sharedConnection = nil;
     // Check _NET_WM_WINDOW_TYPE to determine if window should get decorations
     // Based on original XCBKit logic (lines 705-749)
 
+    NSLog(@"shouldDecorateWindow: Checking window %u", window);
+
     // Get _NET_WM_WINDOW_TYPE property
     xcb_atom_t net_wm_window_type = [self getAtom:"_NET_WM_WINDOW_TYPE"];
     if (net_wm_window_type == XCB_ATOM_NONE) {
         // If we can't get the atom, assume it's a normal window that should be decorated
+        NSLog(@"shouldDecorateWindow: Could not get _NET_WM_WINDOW_TYPE atom");
         return YES;
     }
 
@@ -1375,14 +1378,14 @@ static XCBConnection *sharedConnection = nil;
     xcb_get_property_reply_t *prop_reply = xcb_get_property_reply(self.connection, prop_cookie, NULL);
 
     if (!prop_reply) {
-        // No window type property, assume normal window
-        return YES;
+        // No window type property, check for transient windows (context menus often use this)
+        return [self shouldDecorateTransientWindow:window];
     }
 
     if (xcb_get_property_value_length(prop_reply) == 0) {
-        // Empty property, assume normal window
+        // Empty property, check for transient windows
         free(prop_reply);
-        return YES;
+        return [self shouldDecorateTransientWindow:window];
     }
 
     // Get the window type atom
@@ -1395,6 +1398,10 @@ static XCBConnection *sharedConnection = nil;
     xcb_atom_t menu_atom = [self getAtom:"_NET_WM_WINDOW_TYPE_MENU"];
     xcb_atom_t popup_menu_atom = [self getAtom:"_NET_WM_WINDOW_TYPE_POPUP_MENU"];
     xcb_atom_t dropdown_menu_atom = [self getAtom:"_NET_WM_WINDOW_TYPE_DROPDOWN_MENU"];
+    xcb_atom_t combo_atom = [self getAtom:"_NET_WM_WINDOW_TYPE_COMBO"];
+    xcb_atom_t dnd_atom = [self getAtom:"_NET_WM_WINDOW_TYPE_DND"];
+    xcb_atom_t utility_atom = [self getAtom:"_NET_WM_WINDOW_TYPE_UTILITY"];
+    xcb_atom_t toolbar_atom = [self getAtom:"_NET_WM_WINDOW_TYPE_TOOLBAR"];
     xcb_atom_t tooltip_atom = [self getAtom:"_NET_WM_WINDOW_TYPE_TOOLTIP"];
     xcb_atom_t notification_atom = [self getAtom:"_NET_WM_WINDOW_TYPE_NOTIFICATION"];
     xcb_atom_t splash_atom = [self getAtom:"_NET_WM_WINDOW_TYPE_SPLASH"];
@@ -1404,8 +1411,9 @@ static XCBConnection *sharedConnection = nil;
         NSLog(@"Window %u is dock type, no decoration", window);
         return NO;
     }
-    if (type == menu_atom || type == popup_menu_atom || type == dropdown_menu_atom) {
-        NSLog(@"Window %u is menu type, no decoration", window);
+    if (type == menu_atom || type == popup_menu_atom || type == dropdown_menu_atom ||
+        type == combo_atom || type == dnd_atom) {
+        NSLog(@"Window %u is menu/popup type, no decoration", window);
         return NO;
     }
     if (type == tooltip_atom) {
@@ -1419,6 +1427,29 @@ static XCBConnection *sharedConnection = nil;
     if (type == splash_atom) {
         NSLog(@"Window %u is splash screen type, no decoration", window);
         return NO;
+    }
+    if (type == toolbar_atom || type == utility_atom) {
+        NSLog(@"Window %u is toolbar/utility type, no decoration", window);
+        return NO;
+    }
+
+    // Before considering it a normal window, check size heuristics
+    // Context menus are typically small even if they don't set proper type hints
+    xcb_get_geometry_cookie_t geom_cookie = xcb_get_geometry(self.connection, window);
+    xcb_get_geometry_reply_t *geom_reply = xcb_get_geometry_reply(self.connection, geom_cookie, NULL);
+
+    if (geom_reply) {
+        uint16_t width = geom_reply->width;
+        uint16_t height = geom_reply->height;
+        NSLog(@"Window %u geometry: %dx%d", window, width, height);
+
+        // Context menus are typically small and narrow
+        if (width < 300 && height < 400) {
+            NSLog(@"Window %u is small (%dx%d), likely context menu, no decoration", window, width, height);
+            free(geom_reply);
+            return NO;
+        }
+        free(geom_reply);
     }
 
     // Default: normal windows get decorated
@@ -1436,6 +1467,49 @@ static XCBConnection *sharedConnection = nil;
         return atom;
     }
     return XCB_ATOM_NONE;
+}
+
+- (BOOL)shouldDecorateTransientWindow:(xcb_window_t)window {
+    // Check if this is a transient window (WM_TRANSIENT_FOR property)
+    // Many context menus and popups use this instead of _NET_WM_WINDOW_TYPE
+
+    xcb_get_property_cookie_t transient_cookie = xcb_get_property(
+        self.connection, 0, window, XCB_ATOM_WM_TRANSIENT_FOR, XCB_ATOM_WINDOW, 0, 1);
+    xcb_get_property_reply_t *transient_reply = xcb_get_property_reply(self.connection, transient_cookie, NULL);
+
+    if (transient_reply && xcb_get_property_value_length(transient_reply) > 0) {
+        // Window has WM_TRANSIENT_FOR property - likely a context menu or dialog
+        xcb_window_t *parent = (xcb_window_t*)xcb_get_property_value(transient_reply);
+        NSLog(@"Window %u is transient for window %u, no decoration", window, *parent);
+        free(transient_reply);
+        return NO; // Don't decorate transient windows
+    }
+
+    if (transient_reply) {
+        free(transient_reply);
+    }
+
+    // Check window geometry - context menus are typically small
+    xcb_get_geometry_cookie_t geom_cookie = xcb_get_geometry(self.connection, window);
+    xcb_get_geometry_reply_t *geom_reply = xcb_get_geometry_reply(self.connection, geom_cookie, NULL);
+
+    if (geom_reply) {
+        uint16_t width = geom_reply->width;
+        uint16_t height = geom_reply->height;
+        NSLog(@"Window %u geometry: %dx%d", window, width, height);
+
+        // Context menus are typically small and narrow
+        if (width < 300 && height < 400) {
+            NSLog(@"Window %u is small (%dx%d), likely context menu, no decoration", window, width, height);
+            free(geom_reply);
+            return NO;
+        }
+        free(geom_reply);
+    }
+
+    // Not transient and not small, assume normal window
+    NSLog(@"Window %u is normal type, will be decorated", window);
+    return YES;
 }
 
 #pragma mark - XCB Integration Methods for GSTheme
@@ -1658,68 +1732,6 @@ static XCBConnection *sharedConnection = nil;
     }
 }
 
-- (void)applyGSThemeToRecentlyMappedWindow:(NSNumber*)windowIdNumber {
-    @try {
-        xcb_window_t windowId = [windowIdNumber unsignedIntValue];
-        NSLog(@"Applying GSTheme to recently mapped window: %u", windowId);
-
-        // Find the frame for this client window
-        NSDictionary *windowsMap = self.windowsMap;
-
-        for (NSString *mapWindowId in windowsMap) {
-            XCBWindow *window = [windowsMap objectForKey:mapWindowId];
-
-            if (window && [window isKindOfClass:[XCBFrame class]]) {
-                XCBFrame *frame = (XCBFrame*)window;
-                XCBWindow *clientWindow = [frame childWindowForKey:ClientWindow];
-
-                // Check if this frame contains our client window
-                if (clientWindow && [clientWindow window] == windowId) {
-                    XCBWindow *titlebarWindow = [frame childWindowForKey:TitleBar];
-
-                    if (titlebarWindow && [titlebarWindow isKindOfClass:[XCBTitleBar class]]) {
-                        XCBTitleBar *titlebar = (XCBTitleBar*)titlebarWindow;
-
-                        NSLog(@"Found frame for client window %u, applying GSTheme to titlebar", windowId);
-
-                        // Apply GSTheme rendering using standalone method (works reliably)
-                        BOOL success = [ThemeRenderer renderGSThemeToWindow:window
-                                                                           frame:frame
-                                                                           title:titlebar.windowTitle
-                                                                          active:YES];
-
-                        if (success) {
-                            // Add to managed list so we can handle expose events
-                            ThemeRenderer *integration = [ThemeRenderer sharedInstance];
-                            if (![integration.managedTitlebars containsObject:titlebar]) {
-                                [integration.managedTitlebars addObject:titlebar];
-                            }
-
-                            NSLog(@"Successfully applied GSTheme to titlebar for window %u: %@",
-                                  windowId, titlebar.windowTitle ?: @"(untitled)");
-
-                            // Apply GSTheme again after a short delay using ThemeRenderer
-                            [NSTimer scheduledTimerWithTimeInterval:0.1
-                                                             target:integration
-                                                           selector:@selector(reapplyGSThemeWithTimer:)
-                                                           userInfo:@{@"titlebar": titlebar, @"connection": self}
-                                                            repeats:NO];
-                        } else {
-                            NSLog(@"Failed to apply GSTheme to titlebar for window %u", windowId);
-                        }
-
-                        return; // Found and processed
-                    }
-                }
-            }
-        }
-
-        NSLog(@"Could not find frame for client window %u", windowId);
-
-    } @catch (NSException *exception) {
-        NSLog(@"Exception applying GSTheme to recently mapped window: %@", exception.reason);
-    }
-}
 
 - (void)clearTitlebarBackgroundBeforeResize:(xcb_motion_notify_event_t*)motionEvent {
     @try {
