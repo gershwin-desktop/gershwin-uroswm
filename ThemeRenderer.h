@@ -9,7 +9,12 @@
 #import <AppKit/AppKit.h>
 #import <GNUstepGUI/GSTheme.h>
 #import <xcb/xcb.h>
-#import "XCBWrapper.h"
+
+// Forward declarations
+@class XCBWindow;
+@class XCBFrame;
+@class XCBTitleBar;
+@class XCBConnection;
 
 // Titlebar button types
 typedef NS_ENUM(NSInteger, GSThemeTitleBarButton) {
@@ -49,5 +54,12 @@ typedef NS_ENUM(NSInteger, TitleBarColor) {
 + (void)registerFixedSizeWindow:(xcb_window_t)windowId;
 + (void)unregisterFixedSizeWindow:(xcb_window_t)windowId;
 + (BOOL)isFixedSizeWindow:(xcb_window_t)windowId;
+
+// Pure theming methods (moved from XCBConnection)
+- (GSThemeTitleBarButton)buttonAtPoint:(NSPoint)point forTitlebar:(XCBTitleBar*)titlebar;
+- (void)rerenderTitlebarForFrame:(XCBFrame*)frame active:(BOOL)isActive;
+- (void)reapplyGSThemeToTitlebar:(XCBTitleBar*)titlebar withConnection:(XCBConnection*)connection;
+- (void)setupPeriodicThemeIntegrationWithConnection:(XCBConnection*)connection;
+- (void)checkForNewWindowsWithConnection:(NSTimer*)timer;
 
 @end

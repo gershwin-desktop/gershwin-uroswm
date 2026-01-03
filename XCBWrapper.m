@@ -6,6 +6,7 @@
 //
 
 #import "XCBWrapper.h"
+#import "ThemeRenderer.h"
 #import <xcb/xcb.h>
 #import <xcb/xcb_icccm.h>
 #import <xcb/xproto.h>
@@ -559,7 +560,6 @@ static EWMHService *sharedEWMHInstance = nil;
 }
 
 @end
-
 #pragma mark - TitleBarSettingsService Implementation
 
 static TitleBarSettingsService *sharedTitleBarSettings = nil;
@@ -633,6 +633,10 @@ static XCBConnection *sharedConnection = nil;
         }
         
         NSLog(@"XCBConnection: Connected to X server with %lu screens", (unsigned long)[_screens count]);
+
+        // Setup simple timer-based theme integration
+        [self setupPeriodicThemeIntegration];
+        NSLog(@"GSTheme integration initialized with periodic checking enabled");
     }
     return self;
 }
@@ -746,6 +750,9 @@ static XCBConnection *sharedConnection = nil;
 - (void)handleExpose:(xcb_expose_event_t*)event {
     // Minimal implementation - window needs redraw
     // NSLog(@"Expose event for window %u", event->window);
+
+    // Handle titlebar expose events for GSTheme
+    [self handleTitlebarExpose:event];
 }
 
 - (void)handleEnterNotify:(xcb_enter_notify_event_t*)event {
@@ -760,15 +767,29 @@ static XCBConnection *sharedConnection = nil;
 
 - (void)handleFocusIn:(xcb_focus_in_event_t*)event {
     // Minimal implementation
-    // NSLog(@"Focus in for window %u", event->event);
+    NSLog(@"XCB_FOCUS_IN received for window %u", event->event);
+
+    // Re-render titlebar with GSTheme as active
+    [self handleFocusChange:event->event isActive:YES];
 }
 
 - (void)handleFocusOut:(xcb_focus_out_event_t*)event {
     // Minimal implementation
-    // NSLog(@"Focus out for window %u", event->event);
+    NSLog(@"XCB_FOCUS_OUT received for window %u", event->event);
+
+    // Re-render titlebar with GSTheme as inactive
+    [self handleFocusChange:event->event isActive:NO];
 }
 
 - (void)handleButtonPress:(xcb_button_press_event_t*)event {
+    NSLog(@"EVENT: XCB_BUTTON_PRESS received for window %u at (%d, %d)",
+          event->event, event->event_x, event->event_y);
+
+    // Check if this is a button click on a GSTheme titlebar
+    if ([self handleTitlebarButtonPress:event]) {
+        return; // Titlebar button was handled
+    }
+
     // Handle button press for window dragging
     XCBWindow *window = [self windowForXCBId:event->event];
     if (!window) {
@@ -871,6 +892,9 @@ static XCBConnection *sharedConnection = nil;
         // Ungrab the pointer
         xcb_ungrab_pointer(self.connection, XCB_CURRENT_TIME);
     }
+
+    // After resize completes, update the titlebar with GSTheme
+    [self handleResizeComplete:event];
 }
 
 - (void)handleMotionNotify:(xcb_motion_notify_event_t*)event {
@@ -913,6 +937,9 @@ static XCBConnection *sharedConnection = nil;
 
         // Move the window
         [frame moveToPosition:newPosition];
+    } else {
+        // Handle resize motion if this is a resize operation
+        [self handleResizeDuringMotion:event];
     }
 }
 
@@ -1089,7 +1116,13 @@ static XCBConnection *sharedConnection = nil;
     xcb_map_window(self.connection, titlebar.window);
     xcb_map_window(self.connection, event->window);
     xcb_map_window(self.connection, frame.window);
-    
+
+    // Hide borders for windows with fixed sizes (like info panels and logout)
+    [self adjustBorderForFixedSizeWindow:event->window];
+
+    // Apply GSTheme immediately with no delay
+    [self applyGSThemeToRecentlyMappedWindow:[NSNumber numberWithUnsignedInt:event->window]];
+
     free(geom_reply);
 }
 
@@ -1377,6 +1410,440 @@ static XCBConnection *sharedConnection = nil;
         return atom;
     }
     return XCB_ATOM_NONE;
+}
+
+#pragma mark - XCB Integration Methods for GSTheme
+
+- (void)setupPeriodicThemeIntegration {
+    ThemeRenderer *integration = [ThemeRenderer sharedInstance];
+    [integration setupPeriodicThemeIntegrationWithConnection:self];
+}
+
+- (void)handleTitlebarExpose:(xcb_expose_event_t*)exposeEvent {
+    @try {
+        ThemeRenderer *integration = [ThemeRenderer sharedInstance];
+        if (!integration.enabled) {
+            return;
+        }
+
+        xcb_window_t exposedWindow = exposeEvent->window;
+
+        // Check if the exposed window is a titlebar we're managing
+        for (XCBTitleBar *titlebar in integration.managedTitlebars) {
+            if ([titlebar window] == exposedWindow) {
+                // This titlebar was exposed, re-apply GSTheme to override XCBKit redrawing
+                NSString *windowIdString = [NSString stringWithFormat:@"%u", exposedWindow];
+                XCBWindow *window = [self.windowsMap objectForKey:windowIdString];
+
+                if (window && [window isKindOfClass:[XCBFrame class]]) {
+                    XCBFrame *frame = (XCBFrame*)window;
+
+                    NSLog(@"Titlebar %u exposed, re-applying GSTheme", exposedWindow);
+
+                    // Re-apply GSTheme rendering to override the expose redraw
+                    [ThemeRenderer renderGSThemeToWindow:window
+                                                         frame:frame
+                                                         title:titlebar.windowTitle
+                                                        active:YES];
+                }
+                break;
+            }
+        }
+    } @catch (NSException *exception) {
+        NSLog(@"Exception in titlebar expose handler: %@", exception.reason);
+    }
+}
+
+- (void)handleFocusChange:(xcb_window_t)windowId isActive:(BOOL)isActive {
+    @try {
+        NSLog(@"handleFocusChange: window %u, isActive: %d", windowId, isActive);
+
+        // Find the window that received focus change
+        XCBWindow *window = [self windowForXCBId:windowId];
+        if (!window) {
+            NSLog(@"handleFocusChange: window %u not found in windowsMap, searching for frame containing it", windowId);
+            // The focus event might be for a client window - search all frames
+            NSDictionary *windowsMap = [self windowsMap];
+            for (NSString *mapWindowId in windowsMap) {
+                XCBWindow *mapWindow = [windowsMap objectForKey:mapWindowId];
+                if (mapWindow && [mapWindow isKindOfClass:[XCBFrame class]]) {
+                    XCBFrame *testFrame = (XCBFrame*)mapWindow;
+                    XCBWindow *clientWindow = [testFrame childWindowForKey:ClientWindow];
+                    if (clientWindow && [clientWindow window] == windowId) {
+                        NSLog(@"handleFocusChange: Found frame containing client window %u", windowId);
+                        window = testFrame;
+                        break;
+                    }
+                }
+            }
+            if (!window) {
+                NSLog(@"handleFocusChange: Could not find any frame for window %u", windowId);
+                return;
+            }
+        }
+
+        NSLog(@"handleFocusChange: Found window of type %@", NSStringFromClass([window class]));
+
+        // Find the frame and titlebar
+        XCBFrame *frame = nil;
+        XCBTitleBar *titlebar = nil;
+
+        if ([window isKindOfClass:[XCBFrame class]]) {
+            frame = (XCBFrame*)window;
+        } else if ([window isKindOfClass:[XCBTitleBar class]]) {
+            titlebar = (XCBTitleBar*)window;
+            frame = (XCBFrame*)[titlebar parentWindow];
+        } else if ([window parentWindow] && [[window parentWindow] isKindOfClass:[XCBFrame class]]) {
+            frame = (XCBFrame*)[window parentWindow];
+        }
+
+        if (frame) {
+            XCBWindow *titlebarWindow = [frame childWindowForKey:TitleBar];
+            if (titlebarWindow && [titlebarWindow isKindOfClass:[XCBTitleBar class]]) {
+                titlebar = (XCBTitleBar*)titlebarWindow;
+            }
+        }
+
+        if (!titlebar) {
+            NSLog(@"handleFocusChange: No titlebar found for window %u", windowId);
+            return;
+        }
+
+        // Use ThemeRenderer to re-render with proper focus state
+        ThemeRenderer *integration = [ThemeRenderer sharedInstance];
+        [integration rerenderTitlebarForFrame:frame active:isActive];
+        [self flush];
+
+    } @catch (NSException *exception) {
+        NSLog(@"Exception in handleFocusChange: %@", exception.reason);
+    }
+}
+
+- (BOOL)handleTitlebarButtonPress:(xcb_button_press_event_t*)pressEvent {
+    @try {
+        // Find the window that was clicked
+        XCBWindow *window = [self windowForXCBId:pressEvent->event];
+        NSLog(@"GSTheme: handleTitlebarButtonPress for window ID %u, window object: %@",
+              pressEvent->event, window ? NSStringFromClass([window class]) : @"nil");
+
+        if (!window) {
+            NSLog(@"GSTheme: No window found for ID %u", pressEvent->event);
+            return NO;
+        }
+
+        // Check if it's an XCBTitleBar (GSTheme renders to XCBTitleBar, not a separate class)
+        if (![window isKindOfClass:[XCBTitleBar class]]) {
+            NSLog(@"GSTheme: Window is not XCBTitleBar, it's %@", NSStringFromClass([window class]));
+            return NO;
+        }
+
+        XCBTitleBar *titlebar = (XCBTitleBar*)window;
+
+        // CRITICAL: Allow X11 to continue processing events
+        xcb_allow_events(self.connection, XCB_ALLOW_ASYNC_POINTER, pressEvent->time);
+
+        // Check which button was clicked using ThemeRenderer
+        NSPoint clickPoint = NSMakePoint(pressEvent->event_x, pressEvent->event_y);
+        ThemeRenderer *integration = [ThemeRenderer sharedInstance];
+        GSThemeTitleBarButton button = [integration buttonAtPoint:clickPoint forTitlebar:titlebar];
+
+        if (button == GSThemeTitleBarButtonNone) {
+            return NO; // Click wasn't on a button
+        }
+
+        // Find the frame that contains this titlebar
+        XCBFrame *frame = (XCBFrame*)[titlebar parentWindow];
+        if (!frame || ![frame isKindOfClass:[XCBFrame class]]) {
+            NSLog(@"GSTheme: Could not find frame for titlebar button action");
+            return NO;
+        }
+
+        XCBWindow *clientWindow = [frame childWindowForKey:ClientWindow];
+
+        // Handle the button action using xcbkit methods
+        switch (button) {
+            case GSThemeTitleBarButtonClose:
+                NSLog(@"GSTheme: Close button clicked");
+                if (clientWindow) {
+                    [clientWindow close];
+                    [frame setNeedDestroy:YES];
+                }
+                break;
+
+            case GSThemeTitleBarButtonMiniaturize:
+                NSLog(@"GSTheme: Minimize button clicked");
+                [frame minimize];
+                break;
+
+            case GSThemeTitleBarButtonZoom:
+                NSLog(@"GSTheme: Zoom button clicked, frame isMaximized: %d", [frame isMaximized]);
+                if ([frame isMaximized]) {
+                    // Restore from maximized
+                    [frame restoreDimensionAndPosition];
+                    [self updateTitlebarAfterResize:titlebar frame:frame];
+                } else {
+                    // Maximize to screen size
+                    XCBScreen *screen = [frame onScreen];
+                    XCBSize size = XCBMakeSize([screen width], [screen height]);
+                    XCBPoint position = XCBMakePoint(0.0, 0.0);
+                    [frame maximizeToSize:size andPosition:position];
+                    [frame resizeFrame:size];
+                    [self updateTitlebarAfterResize:titlebar frame:frame];
+                }
+                break;
+
+            default:
+                return NO;
+        }
+
+        [self flush];
+        return YES; // We handled the button press
+
+    } @catch (NSException *exception) {
+        NSLog(@"Exception handling titlebar button press: %@", exception.reason);
+        return NO;
+    }
+}
+
+- (void)updateTitlebarAfterResize:(XCBTitleBar*)titlebar frame:(XCBFrame*)frame {
+    // Helper method to update titlebar after resize operations
+    [titlebar destroyPixmap];
+    [titlebar createPixmap];
+
+    // Redraw with GSTheme
+    [ThemeRenderer renderGSThemeToWindow:frame
+                                         frame:frame
+                                         title:[titlebar windowTitle]
+                                        active:YES];
+
+    [titlebar putWindowBackgroundWithPixmap:[titlebar pixmap]];
+    [titlebar drawArea:[titlebar windowRect]];
+}
+
+- (void)adjustBorderForFixedSizeWindow:(xcb_window_t)clientWindowId {
+    @try {
+        // Check if window has fixed size (min == max in WM_NORMAL_HINTS)
+        xcb_size_hints_t sizeHints;
+        if (xcb_icccm_get_wm_normal_hints_reply(self.connection,
+                                                 xcb_icccm_get_wm_normal_hints(self.connection, clientWindowId),
+                                                 &sizeHints,
+                                                 NULL)) {
+            if ((sizeHints.flags & XCB_ICCCM_SIZE_HINT_P_MIN_SIZE) &&
+                (sizeHints.flags & XCB_ICCCM_SIZE_HINT_P_MAX_SIZE) &&
+                sizeHints.min_width == sizeHints.max_width &&
+                sizeHints.min_height == sizeHints.max_height) {
+
+                NSLog(@"Fixed-size window %u detected - removing border and extra buttons", clientWindowId);
+
+                // Register as fixed-size window (for button hiding in GSTheme rendering)
+                [ThemeRenderer registerFixedSizeWindow:clientWindowId];
+
+                // Find the frame for this client window and set its border to 0
+                NSDictionary *windowsMap = self.windowsMap;
+                for (NSString *mapWindowId in windowsMap) {
+                    XCBWindow *window = [windowsMap objectForKey:mapWindowId];
+
+                    if (window && [window isKindOfClass:[XCBFrame class]]) {
+                        XCBFrame *frame = (XCBFrame*)window;
+                        XCBWindow *clientWindow = [frame childWindowForKey:ClientWindow];
+
+                        if (clientWindow && [clientWindow window] == clientWindowId) {
+                            // Set the frame's border width to 0
+                            uint32_t borderWidth[] = {0};
+                            xcb_configure_window(self.connection,
+                                                 [frame window],
+                                                 XCB_CONFIG_WINDOW_BORDER_WIDTH,
+                                                 borderWidth);
+                            [self flush];
+                            NSLog(@"Removed border from frame %u for fixed-size window %u", [frame window], clientWindowId);
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    } @catch (NSException *exception) {
+        NSLog(@"Exception in adjustBorderForFixedSizeWindow: %@", exception.reason);
+    }
+}
+
+- (void)applyGSThemeToRecentlyMappedWindow:(NSNumber*)windowIdNumber {
+    @try {
+        xcb_window_t windowId = [windowIdNumber unsignedIntValue];
+        NSLog(@"Applying GSTheme to recently mapped window: %u", windowId);
+
+        // Find the frame for this client window
+        NSDictionary *windowsMap = self.windowsMap;
+
+        for (NSString *mapWindowId in windowsMap) {
+            XCBWindow *window = [windowsMap objectForKey:mapWindowId];
+
+            if (window && [window isKindOfClass:[XCBFrame class]]) {
+                XCBFrame *frame = (XCBFrame*)window;
+                XCBWindow *clientWindow = [frame childWindowForKey:ClientWindow];
+
+                // Check if this frame contains our client window
+                if (clientWindow && [clientWindow window] == windowId) {
+                    XCBWindow *titlebarWindow = [frame childWindowForKey:TitleBar];
+
+                    if (titlebarWindow && [titlebarWindow isKindOfClass:[XCBTitleBar class]]) {
+                        XCBTitleBar *titlebar = (XCBTitleBar*)titlebarWindow;
+
+                        NSLog(@"Found frame for client window %u, applying GSTheme to titlebar", windowId);
+
+                        // Apply GSTheme rendering using standalone method (works reliably)
+                        BOOL success = [ThemeRenderer renderGSThemeToWindow:window
+                                                                           frame:frame
+                                                                           title:titlebar.windowTitle
+                                                                          active:YES];
+
+                        if (success) {
+                            // Add to managed list so we can handle expose events
+                            ThemeRenderer *integration = [ThemeRenderer sharedInstance];
+                            if (![integration.managedTitlebars containsObject:titlebar]) {
+                                [integration.managedTitlebars addObject:titlebar];
+                            }
+
+                            NSLog(@"Successfully applied GSTheme to titlebar for window %u: %@",
+                                  windowId, titlebar.windowTitle ?: @"(untitled)");
+
+                            // Apply GSTheme again after a short delay using ThemeRenderer
+                            [NSTimer scheduledTimerWithTimeInterval:0.1
+                                                             target:integration
+                                                           selector:@selector(reapplyGSThemeWithTimer:)
+                                                           userInfo:@{@"titlebar": titlebar, @"connection": self}
+                                                            repeats:NO];
+                        } else {
+                            NSLog(@"Failed to apply GSTheme to titlebar for window %u", windowId);
+                        }
+
+                        return; // Found and processed
+                    }
+                }
+            }
+        }
+
+        NSLog(@"Could not find frame for client window %u", windowId);
+
+    } @catch (NSException *exception) {
+        NSLog(@"Exception applying GSTheme to recently mapped window: %@", exception.reason);
+    }
+}
+
+- (void)clearTitlebarBackgroundBeforeResize:(xcb_motion_notify_event_t*)motionEvent {
+    @try {
+        // Find the frame
+        XCBWindow *window = [self windowForXCBId:motionEvent->event];
+        if (!window || ![window isKindOfClass:[XCBFrame class]]) {
+            return;
+        }
+        XCBFrame *frame = (XCBFrame*)window;
+
+        // Get the titlebar
+        XCBWindow *titlebarWindow = [frame childWindowForKey:TitleBar];
+        if (!titlebarWindow || ![titlebarWindow isKindOfClass:[XCBTitleBar class]]) {
+            return;
+        }
+
+        // Set background to NONE to prevent X11 from tiling the old pixmap
+        uint32_t value = 0; // XCB_BACK_PIXMAP_NONE
+        xcb_change_window_attributes(self.connection,
+                                     [titlebarWindow window],
+                                     XCB_CW_BACK_PIXMAP,
+                                     &value);
+    } @catch (NSException *exception) {
+        // Silently ignore
+    }
+}
+
+- (void)handleResizeDuringMotion:(xcb_motion_notify_event_t*)motionEvent {
+    @try {
+        // Find the window involved in the motion
+        XCBWindow *window = [self windowForXCBId:motionEvent->event];
+        if (!window) {
+            return;
+        }
+
+        // Check if it's a frame (resize happens on frames)
+        XCBFrame *frame = nil;
+        if ([window isKindOfClass:[XCBFrame class]]) {
+            frame = (XCBFrame*)window;
+        }
+
+        if (!frame) {
+            return;
+        }
+
+        // Get the titlebar
+        XCBWindow *titlebarWindow = [frame childWindowForKey:TitleBar];
+        if (!titlebarWindow || ![titlebarWindow isKindOfClass:[XCBTitleBar class]]) {
+            return;
+        }
+        XCBTitleBar *titlebar = (XCBTitleBar*)titlebarWindow;
+
+        // After xcbkit processes motion, windowRect is updated with new size
+        XCBRect titlebarRect = [titlebar windowRect];
+        XCBSize pixmapSize = [titlebar pixmapSize];
+
+        // Only update if the size has changed
+        if (pixmapSize.width != titlebarRect.size.width) {
+            [self updateTitlebarAfterResize:titlebar frame:frame];
+            [titlebar drawArea:titlebarRect];
+            [self flush];
+            [frame configureClient];
+        }
+    } @catch (NSException *exception) {
+        // Silently ignore exceptions during resize motion to avoid spam
+    }
+}
+
+- (void)handleResizeComplete:(xcb_button_release_event_t*)releaseEvent {
+    @try {
+        // Find the window that was released
+        XCBWindow *window = [self windowForXCBId:releaseEvent->event];
+        if (!window) {
+            return;
+        }
+
+        // Check if it's a frame (resize happens on frames)
+        XCBFrame *frame = nil;
+        if ([window isKindOfClass:[XCBFrame class]]) {
+            frame = (XCBFrame*)window;
+        } else if ([window parentWindow] && [[window parentWindow] isKindOfClass:[XCBFrame class]]) {
+            frame = (XCBFrame*)[window parentWindow];
+        }
+
+        if (!frame) {
+            return;
+        }
+
+        // Get the titlebar
+        XCBWindow *titlebarWindow = [frame childWindowForKey:TitleBar];
+        if (!titlebarWindow || ![titlebarWindow isKindOfClass:[XCBTitleBar class]]) {
+            return;
+        }
+        XCBTitleBar *titlebar = (XCBTitleBar*)titlebarWindow;
+
+        // Check if the titlebar size has changed (compare pixmap size to window rect)
+        XCBRect titlebarRect = [titlebar windowRect];
+        XCBSize pixmapSize = [titlebar pixmapSize];
+
+        if (pixmapSize.width != titlebarRect.size.width ||
+            pixmapSize.height != titlebarRect.size.height) {
+            NSLog(@"GSTheme: Titlebar size changed from %fx%f to %fx%f, recreating pixmap",
+                  pixmapSize.width, pixmapSize.height,
+                  titlebarRect.size.width, titlebarRect.size.height);
+
+            [self updateTitlebarAfterResize:titlebar frame:frame];
+            [titlebar drawArea:[titlebar windowRect]];
+            [self flush];
+            [frame configureClient];
+
+            NSLog(@"GSTheme: Titlebar redrawn after resize, client notified");
+        }
+    } @catch (NSException *exception) {
+        NSLog(@"Exception in handleResizeComplete: %@", exception.reason);
+    }
 }
 
 @end

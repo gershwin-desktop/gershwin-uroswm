@@ -802,11 +802,186 @@ static NSMutableSet *fixedSizeWindows = nil;
     }
 }
 
+#pragma mark - Pure Theming Methods
+
+- (GSThemeTitleBarButton)buttonAtPoint:(NSPoint)point forTitlebar:(XCBTitleBar*)titlebar {
+    // Button layout based on actual visual positions from pixel sampling:
+    // Close (red) at x=18, Mini (yellow) at x=37, Zoom (green) at x=56
+    // Buttons are 13px wide with ~19px spacing between centers
+    // Order is: Close, Miniaturize, Zoom (left to right)
+    float buttonSize = 13.0;
+    float buttonSpacing = 19.0;  // Actual spacing between button centers
+    float topMargin = 4.0;       // Adjusted for better vertical hit detection
+    float buttonHeight = 16.0;   // Slightly larger hit area vertically
+    float leftMargin = 12.0;     // Close button starts around x=12
+
+    // Define button rects (order: close, miniaturize, zoom - matching visual order)
+    NSRect closeRect = NSMakeRect(leftMargin, topMargin, buttonSize, buttonHeight);
+    NSRect miniaturizeRect = NSMakeRect(leftMargin + buttonSpacing, topMargin, buttonSize, buttonHeight);
+    NSRect zoomRect = NSMakeRect(leftMargin + (2 * buttonSpacing), topMargin, buttonSize, buttonHeight);
+
+    NSLog(@"GSTheme: Button hit test at point (%.0f, %.0f)", point.x, point.y);
+    NSLog(@"GSTheme: Close rect: (%.0f, %.0f, %.0f, %.0f)", closeRect.origin.x, closeRect.origin.y, closeRect.size.width, closeRect.size.height);
+    NSLog(@"GSTheme: Miniaturize rect: (%.0f, %.0f, %.0f, %.0f)", miniaturizeRect.origin.x, miniaturizeRect.origin.y, miniaturizeRect.size.width, miniaturizeRect.size.height);
+    NSLog(@"GSTheme: Zoom rect: (%.0f, %.0f, %.0f, %.0f)", zoomRect.origin.x, zoomRect.origin.y, zoomRect.size.width, zoomRect.size.height);
+
+    // Check which button was clicked (if any)
+    if (NSPointInRect(point, closeRect)) {
+        NSLog(@"GSTheme: Hit close button");
+        return GSThemeTitleBarButtonClose;
+    }
+    if (NSPointInRect(point, miniaturizeRect)) {
+        NSLog(@"GSTheme: Hit miniaturize button");
+        return GSThemeTitleBarButtonMiniaturize;
+    }
+    if (NSPointInRect(point, zoomRect)) {
+        NSLog(@"GSTheme: Hit zoom button");
+        return GSThemeTitleBarButtonZoom;
+    }
+
+    NSLog(@"GSTheme: No button hit");
+    return GSThemeTitleBarButtonNone;
+}
+
+- (void)rerenderTitlebarForFrame:(XCBFrame*)frame active:(BOOL)isActive {
+    if (!frame) {
+        return;
+    }
+
+    @try {
+        XCBWindow *titlebarWindow = [frame childWindowForKey:TitleBar];
+        if (!titlebarWindow || ![titlebarWindow isKindOfClass:[XCBTitleBar class]]) {
+            return;
+        }
+        XCBTitleBar *titlebar = (XCBTitleBar*)titlebarWindow;
+
+        NSLog(@"Rerendering titlebar '%@' as %@", titlebar.windowTitle, isActive ? @"active" : @"inactive");
+
+        // Render with GSTheme
+        [ThemeRenderer renderGSThemeToWindow:frame
+                                             frame:frame
+                                             title:[titlebar windowTitle]
+                                            active:isActive];
+
+        // Update background pixmap and redraw
+        [titlebar putWindowBackgroundWithPixmap:[titlebar pixmap]];
+        [titlebar drawArea:[titlebar windowRect]];
+
+    } @catch (NSException *exception) {
+        NSLog(@"Exception in rerenderTitlebarForFrame: %@", exception.reason);
+    }
+}
+
+- (void)reapplyGSThemeToTitlebar:(XCBTitleBar*)titlebar withConnection:(XCBConnection*)connection {
+    @try {
+        if (!titlebar) return;
+
+        NSLog(@"Reapplying GSTheme to titlebar: %@", titlebar.windowTitle);
+
+        // Find the frame containing this titlebar
+        NSDictionary *windowsMap = connection.windowsMap;
+
+        for (NSString *windowId in windowsMap) {
+            XCBWindow *window = [windowsMap objectForKey:windowId];
+
+            if (window && [window isKindOfClass:[XCBFrame class]]) {
+                XCBFrame *frame = (XCBFrame*)window;
+                XCBWindow *frameTitle = [frame childWindowForKey:TitleBar];
+
+                if (frameTitle && frameTitle == titlebar) {
+                    // Reapply GSTheme rendering using standalone method (works reliably)
+                    [ThemeRenderer renderGSThemeToWindow:window
+                                                         frame:frame
+                                                         title:titlebar.windowTitle
+                                                        active:YES];
+                    NSLog(@"GSTheme reapplied to titlebar: %@", titlebar.windowTitle);
+                    return;
+                }
+            }
+        }
+
+        NSLog(@"Could not find frame for titlebar reapplication");
+
+    } @catch (NSException *exception) {
+        NSLog(@"Exception in GSTheme reapplication: %@", exception.reason);
+    }
+}
+
+- (void)setupPeriodicThemeIntegrationWithConnection:(XCBConnection*)connection {
+    // Use a timer to periodically check for new windows (less frequent)
+    [NSTimer scheduledTimerWithTimeInterval:5.0
+                                     target:self
+                                   selector:@selector(checkForNewWindowsWithConnection:)
+                                   userInfo:connection
+                                    repeats:YES];
+    NSLog(@"Periodic GSTheme integration timer started (5 second interval)");
+}
+
+- (void)checkForNewWindowsWithConnection:(NSTimer*)timer {
+    XCBConnection *connection = [timer userInfo];
+    @try {
+        // Check if GSTheme integration is enabled
+        if (!self.enabled) {
+            return; // Skip if disabled
+        }
+
+        // Check all windows in the connection for new frames/titlebars
+        NSDictionary *windowsMap = connection.windowsMap;
+        NSUInteger newTitlebarsFound = 0;
+
+        for (NSString *windowId in windowsMap) {
+            XCBWindow *window = [windowsMap objectForKey:windowId];
+
+            // Look for XCBFrame objects (which contain titlebars)
+            if (window && [window isKindOfClass:[XCBFrame class]]) {
+                XCBFrame *frame = (XCBFrame*)window;
+                XCBWindow *titlebarWindow = [frame childWindowForKey:TitleBar];
+
+                if (titlebarWindow && [titlebarWindow isKindOfClass:[XCBTitleBar class]]) {
+                    XCBTitleBar *titlebar = (XCBTitleBar*)titlebarWindow;
+
+                    // Check if we've already processed this titlebar
+                    if (![self.managedTitlebars containsObject:titlebar]) {
+                        newTitlebarsFound++;
+
+                        // Apply standalone GSTheme rendering
+                        BOOL success = [ThemeRenderer renderGSThemeToWindow:window
+                                                                             frame:frame
+                                                                             title:titlebar.windowTitle
+                                                                            active:YES];
+
+                        if (success) {
+                            // Add to managed list only if successful
+                            [self.managedTitlebars addObject:titlebar];
+                            NSLog(@"Applied GSTheme to new titlebar: %@", titlebar.windowTitle ?: @"(untitled)");
+                        }
+                    }
+                }
+            }
+        }
+
+        // Only log if we found new titlebars
+        if (newTitlebarsFound > 0) {
+            NSLog(@"GSTheme periodic check: processed %lu new titlebars", (unsigned long)newTitlebarsFound);
+        }
+
+    } @catch (NSException *exception) {
+        NSLog(@"Exception in periodic window check: %@", exception.reason);
+    }
+}
+
+- (void)reapplyGSThemeWithTimer:(NSTimer*)timer {
+    NSDictionary *userInfo = [timer userInfo];
+    XCBTitleBar *titlebar = [userInfo objectForKey:@"titlebar"];
+    XCBConnection *connection = [userInfo objectForKey:@"connection"];
+
+    [self reapplyGSThemeToTitlebar:titlebar withConnection:connection];
+}
+
 #pragma mark - Cleanup
 
 - (void)dealloc {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
-
 
 @end

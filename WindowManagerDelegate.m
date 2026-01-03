@@ -181,6 +181,17 @@
                 e = nextEvent;
                 continue; // Process the next event instead
             } else {
+                // No more events, process the motion
+                // STEP 1: Clear background pixmap BEFORE resize to prevent X11 tiling
+                [connection clearTitlebarBackgroundBeforeResize:lastMotionEvent];
+                // STEP 2: Let xcbkit resize the windows
+                [connection handleMotionNotify:lastMotionEvent];
+                // STEP 3: Render new content and set as background
+                [connection handleResizeDuringMotion:lastMotionEvent];
+                needFlush = YES;
+                free(lastMotionEvent);
+                lastMotionEvent = NULL;
+                free(e);
                 continue;
             }
         }
@@ -223,6 +234,7 @@
         case XCB_EXPOSE: {
             xcb_expose_event_t *exposeEvent = (xcb_expose_event_t *)event;
             [connection handleExpose:exposeEvent];
+            break;
         }
         case XCB_ENTER_NOTIFY: {
             xcb_enter_notify_event_t *enterEvent = (xcb_enter_notify_event_t *)event;
@@ -250,12 +262,14 @@
             xcb_button_press_event_t *pressEvent = (xcb_button_press_event_t *)event;
             NSLog(@"EVENT: XCB_BUTTON_PRESS received for window %u at (%d, %d)",
                   pressEvent->event, pressEvent->event_x, pressEvent->event_y);
+            [connection handleButtonPress:pressEvent];
             break;
         }
         case XCB_BUTTON_RELEASE: {
             xcb_button_release_event_t *releaseEvent = (xcb_button_release_event_t *)event;
             // Let xcbkit handle the release first
             [connection handleButtonRelease:releaseEvent];
+            break;
         }
         case XCB_MAP_NOTIFY: {
             xcb_map_notify_event_t *notifyEvent = (xcb_map_notify_event_t *)event;
@@ -267,6 +281,7 @@
 
             // Let XCBConnection handle the map request normally (this creates titlebar structure)
             [connection handleMapRequest:mapRequestEvent];
+            break;
         }
         case XCB_UNMAP_NOTIFY: {
             xcb_unmap_notify_event_t *unmapNotifyEvent = (xcb_unmap_notify_event_t *)event;

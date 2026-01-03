@@ -10,6 +10,7 @@
 #import <AppKit/AppKit.h>
 #import <xcb/xcb.h>
 #import <xcb/xcb_icccm.h>
+#import "ThemeRenderer.h"
 
 // Forward declarations
 @class XCBConnection;
@@ -258,6 +259,18 @@ static inline XCBRect XCBMakeRect(XCBPoint origin, XCBSize size) {
 
 // Window filtering
 - (BOOL)shouldDecorateWindow:(xcb_window_t)window;
+
+// GSTheme Integration Methods (XCB-specific integration)
+- (void)handleTitlebarExpose:(xcb_expose_event_t*)exposeEvent;
+- (void)handleFocusChange:(xcb_window_t)windowId isActive:(BOOL)isActive;
+- (BOOL)handleTitlebarButtonPress:(xcb_button_press_event_t*)pressEvent;
+- (void)applyGSThemeToRecentlyMappedWindow:(NSNumber*)windowIdNumber;
+- (void)adjustBorderForFixedSizeWindow:(xcb_window_t)clientWindowId;
+- (void)setupPeriodicThemeIntegration;
+- (void)clearTitlebarBackgroundBeforeResize:(xcb_motion_notify_event_t*)motionEvent;
+- (void)handleResizeDuringMotion:(xcb_motion_notify_event_t*)motionEvent;
+- (void)handleResizeComplete:(xcb_button_release_event_t*)releaseEvent;
+- (void)updateTitlebarAfterResize:(XCBTitleBar*)titlebar frame:(XCBFrame*)frame;
 
 // Utility function to copy NSBitmapImageRep data to XCB pixmap
 // This replaces Cairo functionality with direct XCB operations
