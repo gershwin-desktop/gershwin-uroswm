@@ -35,10 +35,4 @@
 - (void)setupXCBEventIntegration;
 - (void)processXCBEvent:(xcb_generic_event_t*)event;
 
-// NEW: GSTheme Integration methods
-- (void)handleWindowCreated:(XCBTitleBar*)titlebar;
-- (void)handleWindowFocusChanged:(XCBTitleBar*)titlebar isActive:(BOOL)active;
-- (void)refreshAllManagedWindows;
-
-
 @end
