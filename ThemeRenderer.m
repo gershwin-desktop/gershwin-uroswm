@@ -876,9 +876,7 @@ static NSMutableSet *fixedSizeWindows = nil;
     @try {
         if (!titlebar) return;
 
-        NSLog(@"Reapplying GSTheme to titlebar: %@", titlebar.windowTitle);
-
-        // Find the frame containing this titlebar
+        // Find the frame containing this titlebar and reuse existing rerender method
         NSDictionary *windowsMap = connection.windowsMap;
 
         for (NSString *windowId in windowsMap) {
@@ -889,12 +887,8 @@ static NSMutableSet *fixedSizeWindows = nil;
                 XCBWindow *frameTitle = [frame childWindowForKey:TitleBar];
 
                 if (frameTitle && frameTitle == titlebar) {
-                    // Reapply GSTheme rendering using standalone method (works reliably)
-                    [ThemeRenderer renderGSThemeToWindow:window
-                                                         frame:frame
-                                                         title:titlebar.windowTitle
-                                                        active:YES];
-                    NSLog(@"GSTheme reapplied to titlebar: %@", titlebar.windowTitle);
+                    NSLog(@"Reapplying GSTheme to titlebar: %@", titlebar.windowTitle);
+                    [self rerenderTitlebarForFrame:frame active:YES];
                     return;
                 }
             }
@@ -970,13 +964,6 @@ static NSMutableSet *fixedSizeWindows = nil;
     }
 }
 
-- (void)reapplyGSThemeWithTimer:(NSTimer*)timer {
-    NSDictionary *userInfo = [timer userInfo];
-    XCBTitleBar *titlebar = [userInfo objectForKey:@"titlebar"];
-    XCBConnection *connection = [userInfo objectForKey:@"connection"];
-
-    [self reapplyGSThemeToTitlebar:titlebar withConnection:connection];
-}
 
 #pragma mark - Cleanup
 

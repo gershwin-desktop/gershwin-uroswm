@@ -752,7 +752,33 @@ static XCBConnection *sharedConnection = nil;
     // NSLog(@"Expose event for window %u", event->window);
 
     // Handle titlebar expose events for GSTheme
-    [self handleTitlebarExpose:event];
+    @try {
+        ThemeRenderer *integration = [ThemeRenderer sharedInstance];
+        if (integration.enabled) {
+            xcb_window_t exposedWindow = event->window;
+
+            // Check if the exposed window is a titlebar we're managing
+            for (XCBTitleBar *titlebar in integration.managedTitlebars) {
+                if ([titlebar window] == exposedWindow) {
+                    // This titlebar was exposed, re-apply GSTheme to override XCBKit redrawing
+                    NSString *windowIdString = [NSString stringWithFormat:@"%u", exposedWindow];
+                    XCBWindow *window = [self.windowsMap objectForKey:windowIdString];
+
+                    if (window && [window isKindOfClass:[XCBFrame class]]) {
+                        XCBFrame *frame = (XCBFrame*)window;
+                        NSLog(@"Titlebar %u exposed, re-applying GSTheme", exposedWindow);
+                        [ThemeRenderer renderGSThemeToWindow:window
+                                                             frame:frame
+                                                             title:titlebar.windowTitle
+                                                            active:YES];
+                    }
+                    break;
+                }
+            }
+        }
+    } @catch (NSException *exception) {
+        NSLog(@"Exception in titlebar expose handler: %@", exception.reason);
+    }
 }
 
 - (void)handleEnterNotify:(xcb_enter_notify_event_t*)event {
@@ -770,7 +796,7 @@ static XCBConnection *sharedConnection = nil;
     NSLog(@"XCB_FOCUS_IN received for window %u", event->event);
 
     // Re-render titlebar with GSTheme as active
-    [self handleFocusChange:event->event isActive:YES];
+    [self applyFocusChangeToWindow:event->event isActive:YES];
 }
 
 - (void)handleFocusOut:(xcb_focus_out_event_t*)event {
@@ -778,7 +804,7 @@ static XCBConnection *sharedConnection = nil;
     NSLog(@"XCB_FOCUS_OUT received for window %u", event->event);
 
     // Re-render titlebar with GSTheme as inactive
-    [self handleFocusChange:event->event isActive:NO];
+    [self applyFocusChangeToWindow:event->event isActive:NO];
 }
 
 - (void)handleButtonPress:(xcb_button_press_event_t*)event {
@@ -1419,42 +1445,7 @@ static XCBConnection *sharedConnection = nil;
     [integration setupPeriodicThemeIntegrationWithConnection:self];
 }
 
-- (void)handleTitlebarExpose:(xcb_expose_event_t*)exposeEvent {
-    @try {
-        ThemeRenderer *integration = [ThemeRenderer sharedInstance];
-        if (!integration.enabled) {
-            return;
-        }
-
-        xcb_window_t exposedWindow = exposeEvent->window;
-
-        // Check if the exposed window is a titlebar we're managing
-        for (XCBTitleBar *titlebar in integration.managedTitlebars) {
-            if ([titlebar window] == exposedWindow) {
-                // This titlebar was exposed, re-apply GSTheme to override XCBKit redrawing
-                NSString *windowIdString = [NSString stringWithFormat:@"%u", exposedWindow];
-                XCBWindow *window = [self.windowsMap objectForKey:windowIdString];
-
-                if (window && [window isKindOfClass:[XCBFrame class]]) {
-                    XCBFrame *frame = (XCBFrame*)window;
-
-                    NSLog(@"Titlebar %u exposed, re-applying GSTheme", exposedWindow);
-
-                    // Re-apply GSTheme rendering to override the expose redraw
-                    [ThemeRenderer renderGSThemeToWindow:window
-                                                         frame:frame
-                                                         title:titlebar.windowTitle
-                                                        active:YES];
-                }
-                break;
-            }
-        }
-    } @catch (NSException *exception) {
-        NSLog(@"Exception in titlebar expose handler: %@", exception.reason);
-    }
-}
-
-- (void)handleFocusChange:(xcb_window_t)windowId isActive:(BOOL)isActive {
+- (void)applyFocusChangeToWindow:(xcb_window_t)windowId isActive:(BOOL)isActive {
     @try {
         NSLog(@"handleFocusChange: window %u, isActive: %d", windowId, isActive);
 
