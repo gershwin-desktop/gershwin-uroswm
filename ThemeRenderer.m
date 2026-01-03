@@ -5,23 +5,19 @@
 //  Implementation of GSTheme window decoration rendering for X11 titlebars.
 //
 
-#import "URSThemeIntegration.h"
-#import <XCBKit/XCBConnection.h>
-#import <XCBKit/XCBFrame.h>
-#import <cairo/cairo.h>
-#import <cairo/cairo-xcb.h>
+#import "ThemeRenderer.h"
+#import "XCBWrapper.h"
 #import <objc/runtime.h>
-#import "GSThemeTitleBar.h"
 
-@implementation URSThemeIntegration
+@implementation ThemeRenderer
 
-static URSThemeIntegration *sharedInstance = nil;
+static ThemeRenderer *sharedInstance = nil;
 static NSMutableSet *fixedSizeWindows = nil;
 
 #pragma mark - Fixed-size window tracking
 
 + (void)initialize {
-    if (self == [URSThemeIntegration class]) {
+    if (self == [ThemeRenderer class]) {
         fixedSizeWindows = [[NSMutableSet alloc] init];
     }
 }
@@ -44,6 +40,69 @@ static NSMutableSet *fixedSizeWindows = nil;
     @synchronized(fixedSizeWindows) {
         return [fixedSizeWindows containsObject:@(windowId)];
     }
+}
+
++ (BOOL)isGNUStepWindow:(xcb_window_t)windowId connection:(XCBConnection*)connection {
+    if (!connection) return NO;
+
+    // Method 1: Check for _GNUSTEP_WM_ATTR property
+    xcb_atom_t gnustep_attr = XCB_ATOM_NONE;
+    xcb_intern_atom_cookie_t atom_cookie = xcb_intern_atom(connection.connection, 0, 16, "_GNUSTEP_WM_ATTR");
+    xcb_intern_atom_reply_t *atom_reply = xcb_intern_atom_reply(connection.connection, atom_cookie, NULL);
+    if (atom_reply) {
+        gnustep_attr = atom_reply->atom;
+        free(atom_reply);
+    }
+
+    if (gnustep_attr != XCB_ATOM_NONE) {
+        xcb_get_property_cookie_t prop_cookie = xcb_get_property(connection.connection, 0, windowId,
+                                                                gnustep_attr, XCB_ATOM_ANY, 0, UINT32_MAX);
+        xcb_get_property_reply_t *prop_reply = xcb_get_property_reply(connection.connection, prop_cookie, NULL);
+
+        if (prop_reply && xcb_get_property_value_length(prop_reply) > 0) {
+            NSLog(@"Window %u has _GNUSTEP_WM_ATTR property - confirmed GNUstep window", windowId);
+            free(prop_reply);
+            return YES;
+        }
+        if (prop_reply) free(prop_reply);
+    }
+
+    // Method 2: Check WM_CLASS for GNUstep applications
+    xcb_get_property_cookie_t class_cookie = xcb_icccm_get_wm_class(connection.connection, windowId);
+    xcb_icccm_get_wm_class_reply_t class_reply;
+    if (xcb_icccm_get_wm_class_reply(connection.connection, class_cookie, &class_reply, NULL)) {
+        NSString *instance = [NSString stringWithUTF8String:class_reply.instance_name];
+        NSString *class = [NSString stringWithUTF8String:class_reply.class_name];
+
+        // Check for known GNUstep application patterns
+        NSArray *gnustepPatterns = @[@"GWorkspace", @"SystemPreferences", @"Gorm", @"ProjectCenter",
+                                   @"TextEdit", @"Calculator", @"Calendar", @"StepChat", @"Ink",
+                                   @"TimeMon", @"Terminal", @"GNUMail", @"Price"];
+
+        BOOL isGNUStepApp = NO;
+        for (NSString *pattern in gnustepPatterns) {
+            if ([instance containsString:pattern] || [class containsString:pattern]) {
+                isGNUStepApp = YES;
+                break;
+            }
+        }
+
+        NSLog(@"Window %u WM_CLASS: instance='%@', class='%@' -> %@", windowId, instance, class,
+              isGNUStepApp ? @"GNUstep app" : @"non-GNUstep app");
+
+        xcb_icccm_get_wm_class_reply_wipe(&class_reply);
+        return isGNUStepApp;
+    }
+
+    // Method 3: Check if running as part of current GNUstep application
+    // If this window manager is itself a GNUstep app, we might be dealing with our own windows
+    if ([[NSProcessInfo processInfo].processName hasPrefix:@"Window"]) {
+        NSLog(@"Window %u: Unknown origin, assuming non-GNUstep for safety", windowId);
+        return NO;
+    }
+
+    NSLog(@"Window %u: Could not determine if GNUstep window, assuming non-GNUstep", windowId);
+    return NO;
 }
 
 // Method to draw authentic Eau button balls using the exact gradient logic from EauWindowButtonCell
@@ -195,185 +254,7 @@ static NSMutableSet *fixedSizeWindows = nil;
     return [GSTheme theme];
 }
 
-+ (void)enableGSThemeTitleBars {
-    NSLog(@"Enabling GSThemeTitleBar replacement for XCBTitleBar...");
 
-    // The GSThemeTitleBar class will automatically override XCBTitleBar methods
-    // when instances are created. We just need to ensure it's loaded.
-    Class gsThemeClass = [GSThemeTitleBar class];
-    if (gsThemeClass) {
-        NSLog(@"GSThemeTitleBar class loaded successfully");
-    } else {
-        NSLog(@"Warning: GSThemeTitleBar class not found");
-    }
-}
-
-#pragma mark - GSTheme Titlebar Rendering
-
-+ (BOOL)renderGSThemeTitlebar:(XCBTitleBar*)titlebar
-                        title:(NSString*)title
-                       active:(BOOL)isActive {
-
-    if (![[URSThemeIntegration sharedInstance] enabled] || !titlebar) {
-        return NO;
-    }
-
-    GSTheme *theme = [self currentTheme];
-    if (!theme) {
-        NSLog(@"Warning: No GSTheme available for titlebar rendering");
-        return NO;
-    }
-
-    @try {
-        // Get titlebar dimensions - use parent frame width to ensure titlebar spans full window
-        XCBRect xcbRect = titlebar.windowRect;
-        XCBWindow *parentFrame = [titlebar parentWindow];
-        uint16_t titlebarWidth = xcbRect.size.width;
-
-        if (parentFrame) {
-            XCBRect frameRect = [parentFrame windowRect];
-            titlebarWidth = frameRect.size.width;
-
-            // Resize the X11 titlebar window if it doesn't match the frame width
-            if (xcbRect.size.width != frameRect.size.width) {
-                NSLog(@"Resizing titlebar X11 window from %d to %d to match frame",
-                      xcbRect.size.width, frameRect.size.width);
-
-                uint32_t values[] = {frameRect.size.width};
-                xcb_configure_window([[titlebar connection] connection],
-                                     [titlebar window],
-                                     XCB_CONFIG_WINDOW_WIDTH,
-                                     values);
-
-                // Update the titlebar's internal rect
-                xcbRect.size.width = frameRect.size.width;
-                [titlebar setWindowRect:xcbRect];
-
-                // Recreate the pixmap with the new size
-                [titlebar createPixmap];
-
-                [[titlebar connection] flush];
-            }
-        }
-        NSSize titlebarSize = NSMakeSize(titlebarWidth, xcbRect.size.height);
-
-        // Create NSImage for GSTheme to render into
-        NSImage *titlebarImage = [[NSImage alloc] initWithSize:titlebarSize];
-
-        [titlebarImage lockFocus];
-
-        // Clear background with titlebar background color (not transparent!)
-        // Using transparent would leave garbage pixels from uninitialized pixmap
-        [[NSColor lightGrayColor] set];
-        NSRectFill(NSMakeRect(0, 0, titlebarSize.width, titlebarSize.height));
-
-        // Define the titlebar rect
-        NSRect titlebarRect = NSMakeRect(0, 0, titlebarSize.width, titlebarSize.height);
-
-        // Use GSTheme to draw titlebar decoration with all button types
-        NSUInteger styleMask = NSTitledWindowMask | NSClosableWindowMask | NSMiniaturizableWindowMask | NSResizableWindowMask;
-        GSThemeControlState state = isActive ? GSThemeNormalState : GSThemeSelectedState;
-
-        NSLog(@"Drawing GSTheme titlebar with styleMask: 0x%lx, state: %d", (unsigned long)styleMask, (int)state);
-
-        // Draw the window titlebar using GSTheme
-        [theme drawWindowBorder:titlebarRect
-                      withFrame:titlebarRect
-                   forStyleMask:styleMask
-                          state:state
-                       andTitle:title ?: @""];
-
-        // Add properly positioned buttons using Eau theme specifications
-        // Based on Eau theme analysis: 17px spacing, LEFT-aligned (miniaturize first, then close)
-        float buttonSize = 13.0;
-        float buttonSpacing = 17.0;  // Eau theme uses 17px spacing per button
-        float topMargin = 6.0;        // Center vertically in 24px titlebar
-        float leftMargin = 2.0;       // Small margin from left edge
-
-        if (styleMask & NSMiniaturizableWindowMask) {
-            NSButton *miniButton = [theme standardWindowButton:NSWindowMiniaturizeButton forStyleMask:styleMask];
-            if (miniButton) {
-                // Eau positions miniaturize button at LEFT edge (causes title to move right by 17px)
-                NSRect miniFrame = NSMakeRect(
-                    leftMargin,  // At left edge
-                    topMargin,
-                    buttonSize,
-                    buttonSize
-                );
-
-                NSImage *buttonImage = [miniButton image];
-                if (buttonImage) {
-                    [buttonImage drawInRect:miniFrame
-                                   fromRect:NSZeroRect
-                                  operation:NSCompositeSourceOver
-                                   fraction:1.0];
-                    NSLog(@"Drew miniaturize button at Eau LEFT position: %@", NSStringFromRect(miniFrame));
-                }
-            }
-        }
-
-        if (styleMask & NSClosableWindowMask) {
-            NSButton *closeButton = [theme standardWindowButton:NSWindowCloseButton forStyleMask:styleMask];
-            if (closeButton) {
-                // Position close button next to miniaturize button (causes title width to reduce by 17px)
-                NSRect closeFrame = NSMakeRect(
-                    leftMargin + buttonSpacing,  // 17px from left edge (after miniaturize)
-                    topMargin,
-                    buttonSize,
-                    buttonSize
-                );
-
-                NSImage *buttonImage = [closeButton image];
-                if (buttonImage) {
-                    [buttonImage drawInRect:closeFrame
-                                   fromRect:NSZeroRect
-                                  operation:NSCompositeSourceOver
-                                   fraction:1.0];
-                    NSLog(@"Drew close button at Eau LEFT position: %@", NSStringFromRect(closeFrame));
-                }
-            }
-        }
-
-        if (styleMask & NSResizableWindowMask) {
-            NSButton *zoomButton = [theme standardWindowButton:NSWindowZoomButton forStyleMask:styleMask];
-            if (zoomButton) {
-                // Position zoom button after close button
-                NSRect zoomFrame = NSMakeRect(
-                    leftMargin + (2 * buttonSpacing),  // 34px from left edge
-                    topMargin,
-                    buttonSize,
-                    buttonSize
-                );
-
-                NSImage *buttonImage = [zoomButton image];
-                if (buttonImage) {
-                    [buttonImage drawInRect:zoomFrame
-                                   fromRect:NSZeroRect
-                                  operation:NSCompositeSourceOver
-                                   fraction:1.0];
-                    NSLog(@"Drew zoom button at Eau LEFT position: %@", NSStringFromRect(zoomFrame));
-                }
-            }
-        }
-
-        [titlebarImage unlockFocus];
-
-        // Convert NSImage to Cairo surface and apply to titlebar
-        BOOL success = [self transferImage:titlebarImage toTitlebar:titlebar];
-
-        if (success) {
-            NSLog(@"GSTheme titlebar rendered successfully for: %@", title);
-        } else {
-            NSLog(@"Failed to transfer GSTheme titlebar for: %@", title);
-        }
-
-        return success;
-
-    } @catch (NSException *exception) {
-        NSLog(@"GSTheme titlebar rendering failed: %@", exception.reason);
-        return NO;
-    }
-}
 
 #pragma mark - Image Transfer
 
@@ -437,175 +318,71 @@ static NSMutableSet *fixedSizeWindows = nil;
         }
     }
 
-    // Create Cairo surface from XCB titlebar pixmap
-    cairo_surface_t *x11Surface = cairo_xcb_surface_create(
-        [titlebar.connection connection],
-        titlebar.pixmap,
-        titlebar.visual.visualType,
-        (int)image.size.width,
-        (int)image.size.height
-    );
-
-    cairo_status_t surface_status = cairo_surface_status(x11Surface);
-    if (surface_status != CAIRO_STATUS_SUCCESS) {
-        NSLog(@"Failed to create Cairo X11 surface for titlebar: %s", cairo_status_to_string(surface_status));
-        cairo_surface_destroy(x11Surface);
+    // Use direct XCB pixmap operations instead of Cairo
+    NSLog(@"Copying GSTheme image to titlebar pixmap using XCB...");
+    
+    BOOL success = [XCBConnection copyBitmapToPixmap:bitmap
+                                            toPixmap:titlebar.pixmap
+                                          connection:[titlebar.connection connection]
+                                              window:titlebar.window
+                                              visual:titlebar.visual.visualType];
+    
+    if (!success) {
+        NSLog(@"Failed to copy bitmap to titlebar pixmap");
         return NO;
     }
-
-    NSLog(@"Cairo X11 surface created successfully");
-
-    cairo_t *ctx = cairo_create(x11Surface);
-
-    // Create Cairo image surface from bitmap data
-    // NOTE: NSBitmapImageRep uses RGBA but Cairo ARGB32 expects BGRA, so we need to convert
-    unsigned char *bitmapPixels = [bitmap bitmapData];
-    int width = [bitmap pixelsWide];
-    int height = [bitmap pixelsHigh];
-    int bytesPerRow = [bitmap bytesPerRow];
-
-    // Convert RGBA to BGRA for Cairo
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            int offset = (y * bytesPerRow) + (x * 4);
-            unsigned char r = bitmapPixels[offset];
-            unsigned char g = bitmapPixels[offset + 1];
-            unsigned char b = bitmapPixels[offset + 2];
-            unsigned char a = bitmapPixels[offset + 3];
-
-            // Swap R and B for BGRA format expected by Cairo
-            bitmapPixels[offset] = b;     // Blue
-            bitmapPixels[offset + 1] = g; // Green (unchanged)
-            bitmapPixels[offset + 2] = r; // Red
-            bitmapPixels[offset + 3] = a; // Alpha (unchanged)
-        }
-    }
-
-    cairo_surface_t *imageSurface = cairo_image_surface_create_for_data(
-        bitmapPixels,
-        CAIRO_FORMAT_ARGB32,
-        width,
-        height,
-        bytesPerRow
-    );
-
-    if (cairo_surface_status(imageSurface) != CAIRO_STATUS_SUCCESS) {
-        NSLog(@"Failed to create Cairo image surface for titlebar transfer");
-        cairo_surface_destroy(imageSurface);
-        cairo_destroy(ctx);
-        cairo_surface_destroy(x11Surface);
-        return NO;
-    }
-
-    NSLog(@"Painting GSTheme image to X11 surface...");
-
-    // Paint GSTheme image to X11 surface using SOURCE operator
-    // SOURCE completely replaces destination pixels (no compositing)
-    // This prevents old pixmap garbage from showing through
-    cairo_set_operator(ctx, CAIRO_OPERATOR_SOURCE);
-    cairo_set_source_surface(ctx, imageSurface, 0, 0);
-    cairo_paint(ctx);
-    cairo_surface_flush(x11Surface);
-
+    
     // Force immediate X11 update to ensure GSTheme is visible
     [titlebar.connection flush];
     xcb_flush([titlebar.connection connection]);
-
-    NSLog(@"GSTheme image painted and surface flushed");
-
-    // Cleanup first surface
-    cairo_surface_destroy(imageSurface);
-    cairo_destroy(ctx);
-    cairo_surface_destroy(x11Surface);
+    
+    NSLog(@"GSTheme image copied to pixmap successfully");
 
     // ALSO paint to dPixmap (inactive pixmap) so unfocused windows don't show black
-    // XCBWindow.drawArea uses isAbove ? pixmap : dPixmap, so both need content
     xcb_pixmap_t dPixmap = [titlebar dPixmap];
     if (dPixmap != 0) {
-        NSLog(@"Also painting GSTheme to dPixmap (inactive pixmap): %u", dPixmap);
-
-        cairo_surface_t *dSurface = cairo_xcb_surface_create(
-            [titlebar.connection connection],
-            dPixmap,
-            titlebar.visual.visualType,
-            (int)image.size.width,
-            (int)image.size.height
-        );
-
-        if (cairo_surface_status(dSurface) == CAIRO_STATUS_SUCCESS) {
-            cairo_t *dCtx = cairo_create(dSurface);
-
-            // Recreate image surface (we need to redo RGBA->BGRA conversion)
-            // Note: bitmapPixels was already converted above, so we can reuse it
-            cairo_surface_t *dImageSurface = cairo_image_surface_create_for_data(
-                bitmapPixels,
-                CAIRO_FORMAT_ARGB32,
-                width,
-                height,
-                bytesPerRow
-            );
-
-            if (cairo_surface_status(dImageSurface) == CAIRO_STATUS_SUCCESS) {
-                cairo_set_operator(dCtx, CAIRO_OPERATOR_SOURCE);
-                cairo_set_source_surface(dCtx, dImageSurface, 0, 0);
-                cairo_paint(dCtx);
-                cairo_surface_flush(dSurface);
-                NSLog(@"GSTheme also painted to dPixmap successfully");
-            }
-
-            cairo_surface_destroy(dImageSurface);
-            cairo_destroy(dCtx);
+        NSLog(@"Also copying GSTheme to dPixmap (inactive pixmap): %u", dPixmap);
+        
+        BOOL dSuccess = [XCBConnection copyBitmapToPixmap:bitmap
+                                                 toPixmap:dPixmap
+                                               connection:[titlebar.connection connection]
+                                                   window:titlebar.window
+                                                   visual:titlebar.visual.visualType];
+        
+        if (dSuccess) {
+            NSLog(@"GSTheme also copied to dPixmap successfully");
         }
-        cairo_surface_destroy(dSurface);
     }
+
+    // Set the rendered pixmap as the titlebar window background
+    [titlebar putWindowBackgroundWithPixmap:[titlebar pixmap]];
+
+    // Force titlebar window to redraw using its drawArea method
+    XCBRect titlebarRect = [titlebar windowRect];
+    [titlebar drawArea:titlebarRect];
 
     [titlebar.connection flush];
 
     return YES;
 }
 
-#pragma mark - GSTheme Method Swizzling Implementations
 
-// These methods replace XCBTitleBar's drawing methods
-- (void)gstheme_drawTitleBarComponentsPixmaps {
-    // Replace XCBTitleBar's Cairo drawing with GSTheme
-    NSLog(@"GSTheme: Replacing drawTitleBarComponentsPixmaps with GSTheme rendering");
-
-    XCBTitleBar *titlebar = (XCBTitleBar*)self;
-    [URSThemeIntegration renderGSThemeTitlebar:titlebar
-                                         title:titlebar.windowTitle
-                                        active:YES];
-}
-
-- (void)gstheme_drawTitleBarComponents {
-    // Replace XCBTitleBar's Cairo drawing with GSTheme
-    NSLog(@"GSTheme: Replacing drawTitleBarComponents with GSTheme rendering");
-
-    XCBTitleBar *titlebar = (XCBTitleBar*)self;
-    [URSThemeIntegration renderGSThemeTitlebar:titlebar
-                                         title:titlebar.windowTitle
-                                        active:YES];
-}
-
-- (void)gstheme_drawTitleBarForColor:(TitleBarColor)aColor {
-    // Replace XCBTitleBar's Cairo drawing with GSTheme
-    NSLog(@"GSTheme: Replacing drawTitleBarForColor: with GSTheme rendering");
-
-    XCBTitleBar *titlebar = (XCBTitleBar*)self;
-    BOOL isActive = (aColor == TitleBarUpColor);
-    [URSThemeIntegration renderGSThemeTitlebar:titlebar
-                                         title:titlebar.windowTitle
-                                        active:isActive];
-}
 
 + (BOOL)renderGSThemeToWindow:(XCBWindow*)window
                         frame:(XCBFrame*)frame
                         title:(NSString*)title
-                       active:(BOOL)isActive {
+                       active:(BOOL)isActive
+               isGNUStepWindow:(BOOL)isGNUStepWindow {
 
-    if (![[URSThemeIntegration sharedInstance] enabled] || !window || !frame) {
+    if (![[ThemeRenderer sharedInstance] enabled] || !window || !frame) {
         return NO;
     }
+
+    // NOTE: GNUstep window detection and preference checking is now handled
+    // in handleMapRequest in XCBWrapper.m - we only reach this method for windows
+    // that should be decorated by the window manager
+
+    NSLog(@"Proceeding with window manager decoration for window %u", [window window]);
 
     GSTheme *theme = [self currentTheme];
     if (!theme) {
@@ -626,10 +403,10 @@ static NSMutableSet *fixedSizeWindows = nil;
         XCBRect titlebarRect = [titlebar windowRect];
         XCBRect frameRect = [frame windowRect];
 
-        // DEBUG: Add 2 pixels to width and shift 1 pixel left to cover both edges
-        uint16_t targetWidth = frameRect.size.width + 2;
-        int16_t targetX = -1;  // Shift titlebar 1 pixel left
-        NSLog(@"DEBUG: Resizing titlebar X11 window to %d at x=%d (frame=%d, current titlebar=%d)",
+        // For GNUstep windows, use exact frame width; for regular windows add 2 pixels to cover edges
+        uint16_t targetWidth = isGNUStepWindow ? frameRect.size.width : (frameRect.size.width + 2);
+        int16_t targetX = isGNUStepWindow ? 0 : -1;  // GNUstep: no shift, Regular: shift 1 pixel left
+        NSLog(@"DEBUG: Resizing titlebar X11 window to %d at x=%d (frame=%f, current titlebar=%f)",
               targetWidth, targetX, frameRect.size.width, titlebarRect.size.width);
 
         uint32_t values[2] = {(uint32_t)targetX, targetWidth};
@@ -648,8 +425,9 @@ static NSMutableSet *fixedSizeWindows = nil;
         [[frame connection] flush];
 
         // Use frame width to ensure titlebar matches window width exactly
-        // DEBUG: Add 2 pixels (1 on each side) to cover both edges
-        NSSize titlebarSize = NSMakeSize(frameRect.size.width + 2, titlebarRect.size.height);
+        // For GNUstep windows: exact frame width, for regular windows: add 2 pixels to cover edges
+        CGFloat titlebarWidth = isGNUStepWindow ? frameRect.size.width : (frameRect.size.width + 2);
+        NSSize titlebarSize = NSMakeSize(titlebarWidth, titlebarRect.size.height);
         NSLog(@"DEBUG: Using titlebarSize.width = %d (frame was %d)", (int)titlebarSize.width, (int)frameRect.size.width);
 
         // DEBUG: Also get client window dimensions for comparison
@@ -685,7 +463,7 @@ static NSMutableSet *fixedSizeWindows = nil;
         // Check if this is a fixed-size window (only show close button)
         XCBWindow *clientWindow = [frame childWindowForKey:ClientWindow];
         xcb_window_t clientWindowId = clientWindow ? [clientWindow window] : 0;
-        BOOL isFixedSize = clientWindowId && [URSThemeIntegration isFixedSizeWindow:clientWindowId];
+        BOOL isFixedSize = clientWindowId && [ThemeRenderer isFixedSizeWindow:clientWindowId];
 
         NSUInteger styleMask;
         if (isFixedSize) {
@@ -874,7 +652,7 @@ static NSMutableSet *fixedSizeWindows = nil;
                 NSLog(@"Close button color - R:%.3f G:%.3f B:%.3f A:%.3f",
                       [closeButtonColor redComponent], [closeButtonColor greenComponent],
                       [closeButtonColor blueComponent], [closeButtonColor alphaComponent]);
-                [URSThemeIntegration drawEauButtonBall:closeFrame withColor:closeButtonColor];
+                [ThemeRenderer drawEauButtonBall:closeFrame withColor:closeButtonColor];
                 NSLog(@"Standalone: Drew authentic Eau close button ball with red color");
 
                 // Draw the 12x13 image centered in the 15x15 frame
@@ -972,7 +750,7 @@ static NSMutableSet *fixedSizeWindows = nil;
                 NSLog(@"Mini button color - R:%.3f G:%.3f B:%.3f A:%.3f",
                       [miniButtonColor redComponent], [miniButtonColor greenComponent],
                       [miniButtonColor blueComponent], [miniButtonColor alphaComponent]);
-                [URSThemeIntegration drawEauButtonBall:miniFrame withColor:miniButtonColor];
+                [ThemeRenderer drawEauButtonBall:miniFrame withColor:miniButtonColor];
                 NSLog(@"Standalone: Drew authentic Eau miniaturize button ball with yellow color");
 
                 // Draw the 12x13 image centered in the 15x15 frame
@@ -1033,7 +811,7 @@ static NSMutableSet *fixedSizeWindows = nil;
                     NSLog(@"Zoom button color - R:%.3f G:%.3f B:%.3f A:%.3f",
                           [zoomButtonColor redComponent], [zoomButtonColor greenComponent],
                           [zoomButtonColor blueComponent], [zoomButtonColor alphaComponent]);
-                    [URSThemeIntegration drawEauButtonBall:zoomFrame withColor:zoomButtonColor];
+                    [ThemeRenderer drawEauButtonBall:zoomFrame withColor:zoomButtonColor];
                     NSLog(@"Standalone: Drew authentic Eau zoom button ball with green color");
 
                     // Draw the image centered in the 15x15 frame (most zoom images are also 12x13)
@@ -1071,56 +849,6 @@ static NSMutableSet *fixedSizeWindows = nil;
     }
 }
 
-#pragma mark - Titlebar Management
-
-+ (void)refreshAllTitlebars {
-    URSThemeIntegration *integration = [URSThemeIntegration sharedInstance];
-
-    if (!integration.enabled) {
-        return;
-    }
-
-    for (XCBTitleBar *titlebar in integration.managedTitlebars) {
-        // Determine if window is active (simplified for now)
-        BOOL isActive = YES; // TODO: Implement proper active window detection
-
-        [self renderGSThemeTitlebar:titlebar
-                              title:titlebar.windowTitle
-                             active:isActive];
-    }
-
-    NSLog(@"Refreshed %lu titlebars with GSTheme decorations", (unsigned long)[integration.managedTitlebars count]);
-}
-
-#pragma mark - Event Handlers
-
-- (void)handleWindowCreated:(XCBTitleBar*)titlebar {
-    if (!self.enabled || !titlebar) {
-        return;
-    }
-
-    // Add to managed windows list
-    if (![self.managedTitlebars containsObject:titlebar]) {
-        [self.managedTitlebars addObject:titlebar];
-        NSLog(@"Added titlebar to GSTheme management: %@", titlebar.windowTitle);
-    }
-
-    // Render GSTheme decoration
-    [URSThemeIntegration renderGSThemeTitlebar:titlebar
-                                         title:titlebar.windowTitle
-                                        active:YES];
-}
-
-- (void)handleWindowFocusChanged:(XCBTitleBar*)titlebar isActive:(BOOL)active {
-    if (!self.enabled || !titlebar) {
-        return;
-    }
-
-    // Re-render with updated active state
-    [URSThemeIntegration renderGSThemeTitlebar:titlebar
-                                         title:titlebar.windowTitle
-                                        active:active];
-}
 
 
 #pragma mark - Configuration
@@ -1145,15 +873,145 @@ static NSMutableSet *fixedSizeWindows = nil;
     }
 }
 
+#pragma mark - Pure Theming Methods
+
+- (GSThemeTitleBarButton)buttonAtPoint:(NSPoint)point forTitlebar:(XCBTitleBar*)titlebar {
+    // Button layout based on actual visual positions from pixel sampling:
+    // Close (red) at x=18, Mini (yellow) at x=37, Zoom (green) at x=56
+    // Buttons are 13px wide with ~19px spacing between centers
+    // Order is: Close, Miniaturize, Zoom (left to right)
+    float buttonSize = 13.0;
+    float buttonSpacing = 19.0;  // Actual spacing between button centers
+    float topMargin = 4.0;       // Adjusted for better vertical hit detection
+    float buttonHeight = 16.0;   // Slightly larger hit area vertically
+    float leftMargin = 12.0;     // Close button starts around x=12
+
+    // Define button rects (order: close, miniaturize, zoom - matching visual order)
+    NSRect closeRect = NSMakeRect(leftMargin, topMargin, buttonSize, buttonHeight);
+    NSRect miniaturizeRect = NSMakeRect(leftMargin + buttonSpacing, topMargin, buttonSize, buttonHeight);
+    NSRect zoomRect = NSMakeRect(leftMargin + (2 * buttonSpacing), topMargin, buttonSize, buttonHeight);
+
+    NSLog(@"GSTheme: Button hit test at point (%.0f, %.0f)", point.x, point.y);
+    NSLog(@"GSTheme: Close rect: (%.0f, %.0f, %.0f, %.0f)", closeRect.origin.x, closeRect.origin.y, closeRect.size.width, closeRect.size.height);
+    NSLog(@"GSTheme: Miniaturize rect: (%.0f, %.0f, %.0f, %.0f)", miniaturizeRect.origin.x, miniaturizeRect.origin.y, miniaturizeRect.size.width, miniaturizeRect.size.height);
+    NSLog(@"GSTheme: Zoom rect: (%.0f, %.0f, %.0f, %.0f)", zoomRect.origin.x, zoomRect.origin.y, zoomRect.size.width, zoomRect.size.height);
+
+    // Check which button was clicked (if any)
+    if (NSPointInRect(point, closeRect)) {
+        NSLog(@"GSTheme: Hit close button");
+        return GSThemeTitleBarButtonClose;
+    }
+    if (NSPointInRect(point, miniaturizeRect)) {
+        NSLog(@"GSTheme: Hit miniaturize button");
+        return GSThemeTitleBarButtonMiniaturize;
+    }
+    if (NSPointInRect(point, zoomRect)) {
+        NSLog(@"GSTheme: Hit zoom button");
+        return GSThemeTitleBarButtonZoom;
+    }
+
+    NSLog(@"GSTheme: No button hit");
+    return GSThemeTitleBarButtonNone;
+}
+
+- (void)rerenderTitlebarForFrame:(XCBFrame*)frame active:(BOOL)isActive {
+    if (!frame) {
+        return;
+    }
+
+    @try {
+        XCBWindow *titlebarWindow = [frame childWindowForKey:TitleBar];
+        if (!titlebarWindow || ![titlebarWindow isKindOfClass:[XCBTitleBar class]]) {
+            return;
+        }
+        XCBTitleBar *titlebar = (XCBTitleBar*)titlebarWindow;
+
+        NSLog(@"Rerendering titlebar '%@' as %@", titlebar.windowTitle, isActive ? @"active" : @"inactive");
+
+        // Render with GSTheme
+        [ThemeRenderer renderGSThemeToWindow:frame
+                                             frame:frame
+                                             title:[titlebar windowTitle]
+                                            active:isActive
+                                    isGNUStepWindow:NO];
+
+        // Update background pixmap and redraw
+        [titlebar putWindowBackgroundWithPixmap:[titlebar pixmap]];
+        [titlebar drawArea:[titlebar windowRect]];
+
+        // Send configure notify to client so it knows to redraw at new size
+        // This is essential for both regular X11 apps and GNUstep apps
+        NSLog(@"About to send configure notify to client after titlebar rerender");
+        [frame configureClient];
+
+    } @catch (NSException *exception) {
+        NSLog(@"Exception in rerenderTitlebarForFrame: %@", exception.reason);
+    }
+}
+
+- (void)reapplyGSThemeToTitlebar:(XCBTitleBar*)titlebar withConnection:(XCBConnection*)connection {
+    @try {
+        if (!titlebar) return;
+
+        // Find the frame containing this titlebar and reuse existing rerender method
+        NSDictionary *windowsMap = connection.windowsMap;
+
+        for (NSString *windowId in windowsMap) {
+            XCBWindow *window = [windowsMap objectForKey:windowId];
+
+            if (window && [window isKindOfClass:[XCBFrame class]]) {
+                XCBFrame *frame = (XCBFrame*)window;
+                XCBWindow *frameTitle = [frame childWindowForKey:TitleBar];
+
+                if (frameTitle && frameTitle == titlebar) {
+                    NSLog(@"Reapplying GSTheme to titlebar: %@", titlebar.windowTitle);
+                    [self rerenderTitlebarForFrame:frame active:YES];
+                    return;
+                }
+            }
+        }
+
+        NSLog(@"Could not find frame for titlebar reapplication");
+
+    } @catch (NSException *exception) {
+        NSLog(@"Exception in GSTheme reapplication: %@", exception.reason);
+    }
+}
+
+- (void)setupPeriodicThemeIntegrationWithConnection:(XCBConnection*)connection {
+    // Use a timer to periodically check for new windows (less frequent)
+    [NSTimer scheduledTimerWithTimeInterval:5.0
+                                     target:self
+                                   selector:@selector(checkForNewWindowsWithConnection:)
+                                   userInfo:connection
+                                    repeats:YES];
+    NSLog(@"Periodic GSTheme integration timer started (5 second interval)");
+}
+
+- (void)checkForNewWindowsWithConnection:(NSTimer*)timer {
+    @try {
+        // Check if GSTheme integration is enabled
+        if (!self.enabled) {
+            return; // Skip if disabled
+        }
+
+        // NOTE: Decoration decisions are now handled in handleMapRequest in XCBWrapper.m
+        // This periodic timer is disabled to prevent duplicate decoration attempts.
+        // The map request handler already calls renderGSThemeToWindow with proper GNUstep checking.
+
+        NSLog(@"GSTheme periodic timer disabled - decoration handled by map request handler");
+
+    } @catch (NSException *exception) {
+        NSLog(@"Exception in periodic window check: %@", exception.reason);
+    }
+}
+
+
+
 #pragma mark - Cleanup
 
 - (void)dealloc {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
-}
-
-+ (void)disableXCBTitleBarDrawing:(XCBTitleBar*)titlebar {
-    // This method was declared but not used in our independent implementation
-    NSLog(@"URSThemeIntegration: disableXCBTitleBarDrawing called (not needed for independent system)");
 }
 
 @end

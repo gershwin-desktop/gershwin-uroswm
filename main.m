@@ -10,11 +10,10 @@
 //
 
 #import <AppKit/AppKit.h>
-#import "URSHybridEventHandler.h"
-#import "UROSWMApplication.h"
-#import "URSThemeIntegration.h"
-#import <XCBKit/utils/XCBShape.h>
-#import <XCBKit/services/TitleBarSettingsService.h>
+#import "WindowManagerDelegate.h"
+#import "Application.h"
+#import "ThemeRenderer.h"
+#import "XCBWrapper.h"
 
 int main(int argc, const char * argv[])
 {
@@ -32,12 +31,11 @@ int main(int argc, const char * argv[])
 
         // Initialize GSTheme for titlebar decorations
         NSLog(@"Initializing GSTheme titlebar integration...");
-        [URSThemeIntegration initializeGSTheme];
-        [URSThemeIntegration enableGSThemeTitleBars];
+        [ThemeRenderer initializeGSTheme];
 
         // Create custom NSApplication and hybrid event handler
-        UROSWMApplication *app = [UROSWMApplication sharedApplication];
-        URSHybridEventHandler *hybridHandler = [[URSHybridEventHandler alloc] init];
+        Application *app = [Application sharedApplication];
+        WindowManagerDelegate *hybridHandler = [[WindowManagerDelegate alloc] init];
         [app setDelegate:hybridHandler];
 
         // Start NSApplication main loop (replaces blocking XCB event loop)
