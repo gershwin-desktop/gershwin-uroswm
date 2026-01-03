@@ -41,6 +41,9 @@
     // Initialize XCB connection (same as original)
     connection = [XCBConnection sharedConnectionAsWindowManager:YES];
 
+    // Set delegate reference for IPC integration
+    connection.delegate = self;
+
     return self;
 }
 
@@ -55,10 +58,10 @@
     // Mark NSRunLoop as active
     self.nsRunLoopActive = YES;
 
-    // Register as window manager (same as original)
+    // 1. FIRST: Register as window manager (same as original)
     [self registerAsWindowManager];
 
-    // Setup XCB event integration with NSRunLoop
+    // 2. THEN: Setup XCB event integration with NSRunLoop
     [self setupXCBEventIntegration];
 
 }

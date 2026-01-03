@@ -28,8 +28,10 @@
 @property (assign, nonatomic) BOOL nsRunLoopActive;
 @property (assign, nonatomic) NSUInteger eventCount;
 
+
 // Original URSEventHandler methods (preserved for compatibility)
 - (void)registerAsWindowManager;
+
 
 // New NSRunLoop Integration methods
 - (void)setupXCBEventIntegration;

@@ -371,89 +371,16 @@ static NSMutableSet *fixedSizeWindows = nil;
 + (BOOL)renderGSThemeToWindow:(XCBWindow*)window
                         frame:(XCBFrame*)frame
                         title:(NSString*)title
-                       active:(BOOL)isActive {
+                       active:(BOOL)isActive
+               isGNUStepWindow:(BOOL)isGNUStepWindow {
 
     if (![[ThemeRenderer sharedInstance] enabled] || !window || !frame) {
         return NO;
     }
 
-    // First check if this is actually a GNUstep window
-    BOOL isGNUStepWindow = [self isGNUStepWindow:[window window] connection:[window connection]];
-
-    if (isGNUStepWindow) {
-        // Check GNUstep decoration preferences only for GNUstep windows
-        NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-
-        // GSBackHandlesWindowDecorations: NO = GNUstep decorates, YES = WM decorates
-        NSString *backHandlesDecorations = [defaults stringForKey:@"GSBackHandlesWindowDecorations"];
-        BOOL gnustepHandlesDecorations = NO;
-
-        if (backHandlesDecorations) {
-            // Handle both string and boolean values
-            if ([backHandlesDecorations isKindOfClass:[NSString class]]) {
-                gnustepHandlesDecorations = ![backHandlesDecorations boolValue]; // NO means GNUstep decorates
-            } else {
-                gnustepHandlesDecorations = ![defaults boolForKey:@"GSBackHandlesWindowDecorations"];
-            }
-        } else {
-            // Default behavior if key is not set - assume GNUstep handles decorations
-            gnustepHandlesDecorations = YES;
-        }
-
-        if (gnustepHandlesDecorations) {
-            NSLog(@"GNUstep window %u: GNUstep configured to handle decorations (GSBackHandlesWindowDecorations=%@), declining to render", [window window], backHandlesDecorations);
-            return NO;
-        }
-
-        NSLog(@"GNUstep window %u: GNUstep configured to let WM handle decorations (GSBackHandlesWindowDecorations=%@), proceeding", [window window], backHandlesDecorations);
-    } else {
-        NSLog(@"Non-GNUstep window %u: proceeding with window manager decoration", [window window]);
-    }
-
-    // Check if this GNUstep window already has decorations by examining its parent hierarchy
-    // Only do this check for GNUstep windows, as other apps may have legitimate parent windows
-    if (isGNUStepWindow) {
-        XCBConnection *connection = [window connection];
-        if (connection) {
-            xcb_query_tree_cookie_t tree_cookie = xcb_query_tree(connection.connection, [window window]);
-            xcb_query_tree_reply_t *tree_reply = xcb_query_tree_reply(connection.connection, tree_cookie, NULL);
-
-            if (tree_reply) {
-                xcb_window_t parent = tree_reply->parent;
-                xcb_window_t root = tree_reply->root;
-                free(tree_reply);
-
-                // If the window's parent is not the root window, it might already be decorated
-                if (parent != root) {
-                    NSLog(@"GNUstep window %u has non-root parent %u (root=%u), likely already decorated by GNUstep",
-                          [window window], parent, root);
-
-                    // Get parent geometry to check if it's larger than client (indicating decoration)
-                    xcb_get_geometry_cookie_t parent_geom_cookie = xcb_get_geometry(connection.connection, parent);
-                    xcb_get_geometry_cookie_t client_geom_cookie = xcb_get_geometry(connection.connection, [window window]);
-
-                    xcb_get_geometry_reply_t *parent_geom = xcb_get_geometry_reply(connection.connection, parent_geom_cookie, NULL);
-                    xcb_get_geometry_reply_t *client_geom = xcb_get_geometry_reply(connection.connection, client_geom_cookie, NULL);
-
-                    if (parent_geom && client_geom) {
-                        // If parent is larger than client, it's likely a decoration frame
-                        if (parent_geom->width > client_geom->width || parent_geom->height > client_geom->height) {
-                            NSLog(@"GNUstep window %u parent (%ux%u) is larger than client (%ux%u), declining to double-decorate",
-                                  [window window], parent_geom->width, parent_geom->height,
-                                  client_geom->width, client_geom->height);
-
-                            if (parent_geom) free(parent_geom);
-                            if (client_geom) free(client_geom);
-                            return NO;
-                        }
-
-                        if (parent_geom) free(parent_geom);
-                        if (client_geom) free(client_geom);
-                    }
-                }
-            }
-        }
-    }
+    // NOTE: GNUstep window detection and preference checking is now handled
+    // in handleMapRequest in XCBWrapper.m - we only reach this method for windows
+    // that should be decorated by the window manager
 
     NSLog(@"Proceeding with window manager decoration for window %u", [window window]);
 
@@ -476,9 +403,9 @@ static NSMutableSet *fixedSizeWindows = nil;
         XCBRect titlebarRect = [titlebar windowRect];
         XCBRect frameRect = [frame windowRect];
 
-        // DEBUG: Add 2 pixels to width and shift 1 pixel left to cover both edges
-        uint16_t targetWidth = frameRect.size.width + 2;
-        int16_t targetX = -1;  // Shift titlebar 1 pixel left
+        // For GNUstep windows, use exact frame width; for regular windows add 2 pixels to cover edges
+        uint16_t targetWidth = isGNUStepWindow ? frameRect.size.width : (frameRect.size.width + 2);
+        int16_t targetX = isGNUStepWindow ? 0 : -1;  // GNUstep: no shift, Regular: shift 1 pixel left
         NSLog(@"DEBUG: Resizing titlebar X11 window to %d at x=%d (frame=%f, current titlebar=%f)",
               targetWidth, targetX, frameRect.size.width, titlebarRect.size.width);
 
@@ -498,8 +425,9 @@ static NSMutableSet *fixedSizeWindows = nil;
         [[frame connection] flush];
 
         // Use frame width to ensure titlebar matches window width exactly
-        // DEBUG: Add 2 pixels (1 on each side) to cover both edges
-        NSSize titlebarSize = NSMakeSize(frameRect.size.width + 2, titlebarRect.size.height);
+        // For GNUstep windows: exact frame width, for regular windows: add 2 pixels to cover edges
+        CGFloat titlebarWidth = isGNUStepWindow ? frameRect.size.width : (frameRect.size.width + 2);
+        NSSize titlebarSize = NSMakeSize(titlebarWidth, titlebarRect.size.height);
         NSLog(@"DEBUG: Using titlebarSize.width = %d (frame was %d)", (int)titlebarSize.width, (int)frameRect.size.width);
 
         // DEBUG: Also get client window dimensions for comparison
@@ -1004,11 +932,17 @@ static NSMutableSet *fixedSizeWindows = nil;
         [ThemeRenderer renderGSThemeToWindow:frame
                                              frame:frame
                                              title:[titlebar windowTitle]
-                                            active:isActive];
+                                            active:isActive
+                                    isGNUStepWindow:NO];
 
         // Update background pixmap and redraw
         [titlebar putWindowBackgroundWithPixmap:[titlebar pixmap]];
         [titlebar drawArea:[titlebar windowRect]];
+
+        // Send configure notify to client so it knows to redraw at new size
+        // This is essential for both regular X11 apps and GNUstep apps
+        NSLog(@"About to send configure notify to client after titlebar rerender");
+        [frame configureClient];
 
     } @catch (NSException *exception) {
         NSLog(@"Exception in rerenderTitlebarForFrame: %@", exception.reason);
@@ -1055,7 +989,6 @@ static NSMutableSet *fixedSizeWindows = nil;
 }
 
 - (void)checkForNewWindowsWithConnection:(NSTimer*)timer {
-    XCBConnection *connection = [timer userInfo];
     @try {
         // Check if GSTheme integration is enabled
         if (!self.enabled) {
@@ -1072,6 +1005,7 @@ static NSMutableSet *fixedSizeWindows = nil;
         NSLog(@"Exception in periodic window check: %@", exception.reason);
     }
 }
+
 
 
 #pragma mark - Cleanup

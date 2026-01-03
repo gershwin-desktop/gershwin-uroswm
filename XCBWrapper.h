@@ -19,10 +19,24 @@
 @class XCBTitleBar;
 @class XCBScreen;
 @class XCBVisual;
+@class WindowManagerDelegate;
 
 // Constants for child window keys
 extern NSString * const TitleBar;
 extern NSString * const ClientWindow;
+
+// Constants for resize edges
+#define RESIZE_EDGE_NONE     0
+#define RESIZE_EDGE_LEFT     1
+#define RESIZE_EDGE_RIGHT    2
+#define RESIZE_EDGE_TOP      3
+#define RESIZE_EDGE_BOTTOM   4
+#define RESIZE_EDGE_TOPLEFT     5
+#define RESIZE_EDGE_TOPRIGHT    6
+#define RESIZE_EDGE_BOTTOMLEFT  7
+#define RESIZE_EDGE_BOTTOMRIGHT 8
+
+#define RESIZE_BORDER_WIDTH 4  // Pixels from edge to detect resize
 
 // Titlebar color enum (from XCBKit)
 typedef NS_ENUM(NSInteger, ETitleBarColor) {
@@ -148,6 +162,10 @@ static inline XCBRect XCBMakeRect(XCBPoint origin, XCBSize size) {
 @property (assign, nonatomic) BOOL isDragging;
 @property (assign, nonatomic) XCBPoint dragStartPosition;
 @property (assign, nonatomic) XCBPoint windowStartPosition;
+@property (assign, nonatomic) BOOL isResizing;
+@property (assign, nonatomic) XCBPoint resizeStartPosition;
+@property (assign, nonatomic) XCBSize windowStartSize;
+@property (assign, nonatomic) int resizeEdge; // Which edge/corner is being resized
 
 - (instancetype)initWithClientWindow:(XCBWindow*)clientWindow
                       withConnection:(XCBConnection*)connection;
@@ -162,6 +180,7 @@ static inline XCBRect XCBMakeRect(XCBPoint origin, XCBSize size) {
 - (void)setNeedDestroy:(BOOL)needDestroy;
 - (void)configureClient;
 - (void)resizeFrame:(XCBSize)newSize;
+- (int)resizeEdgeForPoint:(XCBPoint)point inFrame:(XCBRect)frameRect;
 
 @end
 
@@ -202,6 +221,7 @@ static inline XCBRect XCBMakeRect(XCBPoint origin, XCBSize size) {
 @property (strong, nonatomic) NSMutableArray *screens;
 @property (assign, nonatomic) xcb_connection_t *connection;
 @property (assign, nonatomic) BOOL needFlush;
+@property (weak, nonatomic) WindowManagerDelegate *delegate;
 
 // Singleton
 + (instancetype)sharedConnectionAsWindowManager:(BOOL)asWindowManager;

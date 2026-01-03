@@ -7,6 +7,7 @@
 
 #import "XCBWrapper.h"
 #import "ThemeRenderer.h"
+#import "WindowManagerDelegate.h"
 #import <xcb/xcb.h>
 #import <xcb/xcb_icccm.h>
 #import <xcb/xproto.h>
@@ -271,6 +272,10 @@ NSString * const ClientWindow = @"ClientWindow";
         _isDragging = NO;
         _dragStartPosition = XCBMakePoint(0, 0);
         _windowStartPosition = XCBMakePoint(0, 0);
+        _isResizing = NO;
+        _resizeStartPosition = XCBMakePoint(0, 0);
+        _windowStartSize = XCBMakeSize(0, 0);
+        _resizeEdge = RESIZE_EDGE_NONE;
 
         // Generate frame window ID
         self.window = xcb_generate_id(connection.connection);
@@ -396,6 +401,7 @@ NSString * const ClientWindow = @"ClientWindow";
 - (void)configureClient {
     // Send synthetic configure notify event to client so it knows the window size changed
     // This is critical for applications like xterm to resize their content
+    // For GNUstep apps, we also need to physically resize them
     XCBWindow *clientWindow = [self childWindowForKey:ClientWindow];
     XCBWindow *titlebarWindow = [self childWindowForKey:TitleBar];
 
@@ -415,14 +421,32 @@ NSString * const ClientWindow = @"ClientWindow";
         titlebarHeight = [titlebarWindow windowRect].size.height;
     }
 
+    // Calculate new client size
+    uint16_t newClientWidth = frameRect.size.width;
+    uint16_t newClientHeight = frameRect.size.height - titlebarHeight;
+
+    // Check if this is a GNUstep window that needs physical resizing
+    BOOL isGNUStepWindow = [ThemeRenderer isGNUStepWindow:clientWindow.window connection:self.connection];
+
+    if (isGNUStepWindow) {
+        // For GNUstep windows: physically resize the client window first
+        NSLog(@"XCBFrame: GNUstep window - physically resizing client window %u to %dx%d",
+              clientWindow.window, newClientWidth, newClientHeight);
+
+        uint32_t values[2] = {newClientWidth, newClientHeight};
+        xcb_configure_window(self.connection.connection, clientWindow.window,
+                           XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT, values);
+        [self.connection flush];
+    }
+
     // Synthetic event - coordinates must be in root space
     event.response_type = XCB_CONFIGURE_NOTIFY;
     event.event = clientWindow.window;
     event.window = clientWindow.window;
     event.x = frameRect.origin.x;
     event.y = frameRect.origin.y + titlebarHeight;
-    event.width = frameRect.size.width;
-    event.height = frameRect.size.height - titlebarHeight;
+    event.width = newClientWidth;
+    event.height = newClientHeight;
     event.border_width = 0;
     event.above_sibling = XCB_NONE;
     event.override_redirect = 0;
@@ -438,8 +462,9 @@ NSString * const ClientWindow = @"ClientWindow";
     );
     clientWindow.windowRect = clientRect;
 
-    NSLog(@"XCBFrame: Sent configure notify to client window %u (size: %dx%d)",
-          clientWindow.window, event.width, event.height);
+    NSLog(@"XCBFrame: Sent configure notify to client window %u (size: %dx%d, position: %d,%d, frame: %dx%d)",
+          clientWindow.window, event.width, event.height, event.x, event.y,
+          (int)frameRect.size.width, (int)frameRect.size.height);
 }
 
 - (void)resizeFrame:(XCBSize)newSize {
@@ -489,6 +514,34 @@ NSString * const ClientWindow = @"ClientWindow";
           (int)newSize.width, (int)newSize.height,
           (int)newSize.width, titlebarHeight,
           (int)newSize.width, (int)(newSize.height - titlebarHeight));
+}
+
+- (int)resizeEdgeForPoint:(XCBPoint)point inFrame:(XCBRect)frameRect {
+    // Determine which edge/corner is being clicked for resize operations
+    double x = point.x - frameRect.origin.x;
+    double y = point.y - frameRect.origin.y;
+    double width = frameRect.size.width;
+    double height = frameRect.size.height;
+
+    // Check if point is near edges
+    BOOL nearLeft = (x <= RESIZE_BORDER_WIDTH);
+    BOOL nearRight = (x >= width - RESIZE_BORDER_WIDTH);
+    BOOL nearTop = (y <= RESIZE_BORDER_WIDTH);
+    BOOL nearBottom = (y >= height - RESIZE_BORDER_WIDTH);
+
+    // Corner detection takes precedence
+    if (nearTop && nearLeft) return RESIZE_EDGE_TOPLEFT;
+    if (nearTop && nearRight) return RESIZE_EDGE_TOPRIGHT;
+    if (nearBottom && nearLeft) return RESIZE_EDGE_BOTTOMLEFT;
+    if (nearBottom && nearRight) return RESIZE_EDGE_BOTTOMRIGHT;
+
+    // Edge detection
+    if (nearLeft) return RESIZE_EDGE_LEFT;
+    if (nearRight) return RESIZE_EDGE_RIGHT;
+    if (nearTop) return RESIZE_EDGE_TOP;
+    if (nearBottom) return RESIZE_EDGE_BOTTOM;
+
+    return RESIZE_EDGE_NONE;
 }
 
 @end
@@ -770,7 +823,8 @@ static XCBConnection *sharedConnection = nil;
                         [ThemeRenderer renderGSThemeToWindow:window
                                                              frame:frame
                                                              title:titlebar.windowTitle
-                                                            active:YES];
+                                                            active:YES
+                                                    isGNUStepWindow:NO];
                     }
                     break;
                 }
@@ -842,20 +896,35 @@ static XCBConnection *sharedConnection = nil;
         frame = (XCBFrame*)window.parentWindow;
     }
 
-    // Only start dragging if we clicked on titlebar or frame (not client window)
+    // Only handle interactions if we clicked on titlebar or frame (not client window)
     if (frame && (isTitleBar || [window isKindOfClass:[XCBFrame class]])) {
-        // Don't allow dragging if window is maximized
+        // Don't allow dragging/resizing if window is maximized
         if (frame.maximized) {
             return;
         }
 
-        // Start dragging
-        frame.isDragging = YES;
-        frame.dragStartPosition = XCBMakePoint(event->root_x, event->root_y);
-        frame.windowStartPosition = XCBMakePoint(frame.windowRect.origin.x, frame.windowRect.origin.y);
+        // Check if this is a resize operation (clicked near frame edge)
+        XCBPoint clickPoint = XCBMakePoint(event->root_x, event->root_y);
+        int resizeEdge = [frame resizeEdgeForPoint:clickPoint inFrame:frame.windowRect];
 
-        NSLog(@"XCBFrame: Started dragging window %u from position (%.0f, %.0f)",
-              frame.window, frame.windowStartPosition.x, frame.windowStartPosition.y);
+        if (resizeEdge != RESIZE_EDGE_NONE && !isTitleBar) {
+            // Start resizing
+            frame.isResizing = YES;
+            frame.resizeEdge = resizeEdge;
+            frame.resizeStartPosition = clickPoint;
+            frame.windowStartSize = XCBMakeSize(frame.windowRect.size.width, frame.windowRect.size.height);
+
+            NSLog(@"XCBFrame: Started resizing window %u from edge %d, size %.0fx%.0f",
+                  frame.window, resizeEdge, frame.windowStartSize.width, frame.windowStartSize.height);
+        } else {
+            // Start dragging (titlebar or non-edge frame area)
+            frame.isDragging = YES;
+            frame.dragStartPosition = XCBMakePoint(event->root_x, event->root_y);
+            frame.windowStartPosition = XCBMakePoint(frame.windowRect.origin.x, frame.windowRect.origin.y);
+
+            NSLog(@"XCBFrame: Started dragging window %u from position (%.0f, %.0f)",
+                  frame.window, frame.windowStartPosition.x, frame.windowStartPosition.y);
+        }
 
         // Grab the pointer to ensure we receive all motion events
         xcb_grab_pointer(self.connection,
@@ -894,14 +963,14 @@ static XCBConnection *sharedConnection = nil;
         frame = (XCBFrame*)window.parentWindow;
     }
 
-    // Check if any frame is currently dragging and stop it
+    // Check if any frame is currently dragging or resizing and stop it
     if (!frame) {
-        // Search through all windows to find any dragging frame
+        // Search through all windows to find any dragging or resizing frame
         for (NSString *key in self.windowsMap) {
             XCBWindow *win = [self.windowsMap objectForKey:key];
             if ([win isKindOfClass:[XCBFrame class]]) {
                 XCBFrame *checkFrame = (XCBFrame*)win;
-                if (checkFrame.isDragging) {
+                if (checkFrame.isDragging || checkFrame.isResizing) {
                     frame = checkFrame;
                     break;
                 }
@@ -914,6 +983,15 @@ static XCBConnection *sharedConnection = nil;
         frame.isDragging = NO;
         NSLog(@"XCBFrame: Stopped dragging window %u at position (%.0f, %.0f)",
               frame.window, frame.windowRect.origin.x, frame.windowRect.origin.y);
+
+        // Ungrab the pointer
+        xcb_ungrab_pointer(self.connection, XCB_CURRENT_TIME);
+    } else if (frame && frame.isResizing) {
+        // Stop resizing
+        frame.isResizing = NO;
+        frame.resizeEdge = RESIZE_EDGE_NONE;
+        NSLog(@"XCBFrame: Stopped resizing window %u at size %.0fx%.0f",
+              frame.window, frame.windowRect.size.width, frame.windowRect.size.height);
 
         // Ungrab the pointer
         xcb_ungrab_pointer(self.connection, XCB_CURRENT_TIME);
@@ -963,8 +1041,63 @@ static XCBConnection *sharedConnection = nil;
 
         // Move the window
         [frame moveToPosition:newPosition];
+    } else if (frame && frame.isResizing) {
+        // Handle resize operations
+        int16_t deltaX = event->root_x - frame.resizeStartPosition.x;
+        int16_t deltaY = event->root_y - frame.resizeStartPosition.y;
+
+        XCBSize newSize = frame.windowStartSize;
+        XCBPoint newPosition = frame.windowRect.origin;
+
+        // Calculate new size based on resize edge
+        switch (frame.resizeEdge) {
+            case RESIZE_EDGE_RIGHT:
+                newSize.width = frame.windowStartSize.width + deltaX;
+                break;
+            case RESIZE_EDGE_LEFT:
+                newSize.width = frame.windowStartSize.width - deltaX;
+                newPosition.x = frame.windowRect.origin.x + deltaX;
+                break;
+            case RESIZE_EDGE_BOTTOM:
+                newSize.height = frame.windowStartSize.height + deltaY;
+                break;
+            case RESIZE_EDGE_TOP:
+                newSize.height = frame.windowStartSize.height - deltaY;
+                newPosition.y = frame.windowRect.origin.y + deltaY;
+                break;
+            case RESIZE_EDGE_BOTTOMRIGHT:
+                newSize.width = frame.windowStartSize.width + deltaX;
+                newSize.height = frame.windowStartSize.height + deltaY;
+                break;
+            case RESIZE_EDGE_BOTTOMLEFT:
+                newSize.width = frame.windowStartSize.width - deltaX;
+                newSize.height = frame.windowStartSize.height + deltaY;
+                newPosition.x = frame.windowRect.origin.x + deltaX;
+                break;
+            case RESIZE_EDGE_TOPRIGHT:
+                newSize.width = frame.windowStartSize.width + deltaX;
+                newSize.height = frame.windowStartSize.height - deltaY;
+                newPosition.y = frame.windowRect.origin.y + deltaY;
+                break;
+            case RESIZE_EDGE_TOPLEFT:
+                newSize.width = frame.windowStartSize.width - deltaX;
+                newSize.height = frame.windowStartSize.height - deltaY;
+                newPosition.x = frame.windowRect.origin.x + deltaX;
+                newPosition.y = frame.windowRect.origin.y + deltaY;
+                break;
+        }
+
+        // Enforce minimum size
+        if (newSize.width < 100) newSize.width = 100;
+        if (newSize.height < 50) newSize.height = 50;
+
+        // Perform the resize
+        if (newPosition.x != frame.windowRect.origin.x || newPosition.y != frame.windowRect.origin.y) {
+            [frame moveToPosition:newPosition];
+        }
+        [frame resizeFrame:newSize];
     } else {
-        // Handle resize motion if this is a resize operation
+        // Handle resize motion if this is a resize operation (legacy)
         [self handleResizeDuringMotion:event];
     }
 }
@@ -976,7 +1109,7 @@ static XCBConnection *sharedConnection = nil;
 
 - (void)handleMapRequest:(xcb_map_request_event_t*)event {
     // This is a critical WM function - a client wants to map a window
-    NSLog(@"Map request for window %u", event->window);
+    NSLog(@"=== MAP REQUEST START: window %u ===", event->window);
 
     // Check if this window is already managed
     XCBWindow *existingWindow = [self windowForXCBId:event->window];
@@ -1035,9 +1168,12 @@ static XCBConnection *sharedConnection = nil;
         return;
     }
 
-    // Check if this is a GNUstep window before creating any frame
+    // Check if this is a GNUstep window
     BOOL isGNUStepWindow = [ThemeRenderer isGNUStepWindow:event->window connection:self];
+    BOOL isGNUStepWindowNeedingDecorations = NO;
+
     if (isGNUStepWindow) {
+        NSLog(@"GNUstep window %u detected (size: %dx%d)", event->window, geom_reply->width, geom_reply->height);
         // Check GNUstep decoration preferences
         NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
         NSString *backHandlesDecorations = [defaults stringForKey:@"GSBackHandlesWindowDecorations"];
@@ -1050,13 +1186,27 @@ static XCBConnection *sharedConnection = nil;
         }
 
         if (gnustepHandlesDecorations) {
-            NSLog(@"GNUstep window %u: GNUstep handles decorations, mapping directly without frame", event->window);
+            // GNUstep handles decorations - map directly without any frames
+            NSLog(@"GNUstep window %u handles decorations, mapping directly", event->window);
             xcb_map_window(self.connection, event->window);
             free(geom_reply);
             return;
-        }
+        } else {
+            // GNUstep expects WM to provide decorations - but check if it should be filtered
+            NSLog(@"GNUstep window %u needs decorations, checking if should be filtered", event->window);
 
-        NSLog(@"GNUstep window %u: WM should handle decorations, proceeding with frame", event->window);
+            // Even GNUstep windows can be context menus - check size and transient properties
+            BOOL shouldStillDecorate = [self shouldDecorateWindow:event->window];
+            if (!shouldStillDecorate) {
+                NSLog(@"GNUstep window %u filtered out (likely context menu), mapping without frame", event->window);
+                xcb_map_window(self.connection, event->window);
+                free(geom_reply);
+                return;
+            }
+
+            NSLog(@"GNUstep window %u passed filtering, creating frame", event->window);
+            isGNUStepWindowNeedingDecorations = YES;
+        }
     }
     
     // Create or get client window object
@@ -1077,17 +1227,75 @@ static XCBConnection *sharedConnection = nil;
     // Calculate frame geometry (client + titlebar + borders)
     TitleBarSettingsService *tbSettings = [TitleBarSettingsService sharedInstance];
     int titlebarHeight = tbSettings.height;
-    int borderWidth = 1;
-    
-    int frameX = geom_reply->x - borderWidth;
-    int frameY = geom_reply->y - titlebarHeight - borderWidth;
+    int borderWidth = isGNUStepWindowNeedingDecorations ? 0 : 1; // No borders for GNUstep windows
+
+    int frameX, frameY, frameWidth, frameHeight;
+
+    if (isGNUStepWindowNeedingDecorations) {
+        // GNUstep windows: Try to get actual content size, not decorated window size
+        int contentWidth = geom_reply->width;
+        int contentHeight = geom_reply->height;
+
+        // Try to get WM_NORMAL_HINTS for size constraints (but keep requested size)
+        xcb_get_property_cookie_t hints_cookie = xcb_icccm_get_wm_normal_hints(self.connection, event->window);
+        xcb_size_hints_t size_hints;
+        if (xcb_icccm_get_wm_normal_hints_reply(self.connection, hints_cookie, &size_hints, NULL)) {
+            // For GNUstep: respect the actual requested size, but enforce minimums
+            if (size_hints.flags & XCB_ICCCM_SIZE_HINT_P_MIN_SIZE) {
+                if (contentWidth < size_hints.min_width) {
+                    NSLog(@"GNUstep: Enforcing min width %d (was %d)", size_hints.min_width, contentWidth);
+                    contentWidth = size_hints.min_width;
+                }
+                if (contentHeight < size_hints.min_height) {
+                    NSLog(@"GNUstep: Enforcing min height %d (was %d)", size_hints.min_height, contentHeight);
+                    contentHeight = size_hints.min_height;
+                }
+            }
+
+            // Also check max size constraints
+            if (size_hints.flags & XCB_ICCCM_SIZE_HINT_P_MAX_SIZE) {
+                if (contentWidth > size_hints.max_width) {
+                    NSLog(@"GNUstep: Enforcing max width %d (was %d)", size_hints.max_width, contentWidth);
+                    contentWidth = size_hints.max_width;
+                }
+                if (contentHeight > size_hints.max_height) {
+                    NSLog(@"GNUstep: Enforcing max height %d (was %d)", size_hints.max_height, contentHeight);
+                    contentHeight = size_hints.max_height;
+                }
+            }
+
+            NSLog(@"GNUstep: Using requested geometry %dx%d (constraints applied)",
+                  contentWidth, contentHeight);
+        } else {
+            NSLog(@"GNUstep: No size hints available, using requested geometry: %dx%d",
+                  contentWidth, contentHeight);
+        }
+
+
+        frameX = geom_reply->x;
+        frameY = geom_reply->y - titlebarHeight;
+        frameWidth = contentWidth;
+        frameHeight = contentHeight + titlebarHeight;
+
+        NSLog(@"GSIPC: GNUstep window frame: x=%d y=%d w=%d h=%d (content: %dx%d + titlebar: %d)",
+              frameX, frameY, frameWidth, frameHeight,
+              contentWidth, contentHeight, titlebarHeight);
+    } else {
+        // Regular X11 windows: Use traditional calculation with borders
+        frameX = geom_reply->x - borderWidth;
+        frameY = geom_reply->y - titlebarHeight - borderWidth;
+        frameWidth = geom_reply->width + (borderWidth * 2);
+        frameHeight = geom_reply->height + titlebarHeight + (borderWidth * 2);
+
+        NSLog(@"Regular window frame: x=%d y=%d w=%d h=%d (client: %dx%d + titlebar: %d + borders: %d)",
+              frameX, frameY, frameWidth, frameHeight,
+              geom_reply->width, geom_reply->height, titlebarHeight, borderWidth);
+    }
 
     // Ensure titlebar is not positioned above screen (Y >= 0)
     if (frameY < 0) {
         frameY = 0;
     }
-    int frameWidth = geom_reply->width + (borderWidth * 2);
-    int frameHeight = geom_reply->height + titlebarHeight + (borderWidth * 2);
     
     // Create frame window
     uint32_t frame_mask = XCB_CW_BACK_PIXEL | XCB_CW_EVENT_MASK;
@@ -1157,21 +1365,44 @@ static XCBConnection *sharedConnection = nil;
     clientWindow.parentWindow = frame;
     
     // Reparent client window into frame
+    // GNUstep windows position at (0, titlebarHeight), regular windows at (borderWidth, titlebarHeight)
+    int clientX = isGNUStepWindowNeedingDecorations ? 0 : borderWidth;
+    int clientY = titlebarHeight;
+
     xcb_reparent_window(self.connection,
                        event->window,
                        frame.window,
-                       borderWidth,
-                       titlebarHeight);
+                       clientX,
+                       clientY);
+
+    NSLog(@"Client window positioned at (%d, %d) within frame", clientX, clientY);
+
+    // Resize client window to match the calculated content size
+    if (isGNUStepWindowNeedingDecorations) {
+        // Get the content size we calculated above
+        int finalContentWidth = frameWidth;
+        int finalContentHeight = frameHeight - titlebarHeight;
+
+        // Always resize GNUstep client windows to match our frame calculations
+        uint32_t clientConfigValues[2] = {finalContentWidth, finalContentHeight};
+        xcb_configure_window(self.connection, event->window,
+                           XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT,
+                           clientConfigValues);
+        NSLog(@"GSIPC: Resized GNUstep client window to content size: %dx%d",
+              finalContentWidth, finalContentHeight);
+    }
     
     // Hide borders for windows with fixed sizes (like info panels and logout)
     [self adjustBorderForFixedSizeWindow:event->window];
 
     // Apply GSTheme decoration (we only reach here for windows that should be decorated)
-    NSString *windowTitle = @""; // TODO: Get actual window title if needed
+    NSString *windowTitle = @"";
+
     BOOL themeSuccess = [ThemeRenderer renderGSThemeToWindow:clientWindow
                                                       frame:frame
                                                       title:windowTitle
-                                                     active:YES];
+                                                     active:YES
+                                            isGNUStepWindow:isGNUStepWindowNeedingDecorations];
 
     if (!themeSuccess) {
         // This shouldn't happen since we pre-checked, but handle gracefully
@@ -1190,6 +1421,7 @@ static XCBConnection *sharedConnection = nil;
     xcb_map_window(self.connection, event->window);
     xcb_map_window(self.connection, frame.window);
 
+    NSLog(@"=== MAP REQUEST END: window %u decorated ===", event->window);
     free(geom_reply);
 }
 
@@ -1246,44 +1478,154 @@ static XCBConnection *sharedConnection = nil;
 }
 
 - (void)handleConfigureRequest:(xcb_configure_request_event_t*)event {
-    // Minimal implementation - client wants to reconfigure
+    // Proper three-window coordination for configure requests
     NSLog(@"Configure request for window %u", event->window);
-    
-    // Grant the request
-    uint32_t values[7];
-    int i = 0;
-    uint16_t mask = 0;
-    
-    if (event->value_mask & XCB_CONFIG_WINDOW_X) {
-        mask |= XCB_CONFIG_WINDOW_X;
-        values[i++] = event->x;
+
+    // Find the client window
+    XCBWindow *clientWindow = [self windowForXCBId:event->window];
+    if (!clientWindow) {
+        // Unmanaged window - grant request directly
+        NSLog(@"Configure request for unmanaged window %u - granting directly", event->window);
+        uint32_t values[7];
+        int i = 0;
+        uint16_t mask = 0;
+
+        if (event->value_mask & XCB_CONFIG_WINDOW_X) {
+            mask |= XCB_CONFIG_WINDOW_X;
+            values[i++] = event->x;
+        }
+        if (event->value_mask & XCB_CONFIG_WINDOW_Y) {
+            mask |= XCB_CONFIG_WINDOW_Y;
+            values[i++] = event->y;
+        }
+        if (event->value_mask & XCB_CONFIG_WINDOW_WIDTH) {
+            mask |= XCB_CONFIG_WINDOW_WIDTH;
+            values[i++] = event->width;
+        }
+        if (event->value_mask & XCB_CONFIG_WINDOW_HEIGHT) {
+            mask |= XCB_CONFIG_WINDOW_HEIGHT;
+            values[i++] = event->height;
+        }
+        if (event->value_mask & XCB_CONFIG_WINDOW_BORDER_WIDTH) {
+            mask |= XCB_CONFIG_WINDOW_BORDER_WIDTH;
+            values[i++] = event->border_width;
+        }
+        if (event->value_mask & XCB_CONFIG_WINDOW_SIBLING) {
+            mask |= XCB_CONFIG_WINDOW_SIBLING;
+            values[i++] = event->sibling;
+        }
+        if (event->value_mask & XCB_CONFIG_WINDOW_STACK_MODE) {
+            mask |= XCB_CONFIG_WINDOW_STACK_MODE;
+            values[i++] = event->stack_mode;
+        }
+
+        xcb_configure_window(self.connection, event->window, mask, values);
+        return;
     }
-    if (event->value_mask & XCB_CONFIG_WINDOW_Y) {
-        mask |= XCB_CONFIG_WINDOW_Y;
-        values[i++] = event->y;
+
+    // Check if this is a client window with a frame
+    if (!clientWindow.parentWindow || ![clientWindow.parentWindow isKindOfClass:[XCBFrame class]]) {
+        // Client window without frame - grant request directly
+        NSLog(@"Configure request for unframed client window %u - granting directly", event->window);
+        uint32_t values[7];
+        int i = 0;
+        uint16_t mask = 0;
+
+        if (event->value_mask & XCB_CONFIG_WINDOW_WIDTH) {
+            mask |= XCB_CONFIG_WINDOW_WIDTH;
+            values[i++] = event->width;
+        }
+        if (event->value_mask & XCB_CONFIG_WINDOW_HEIGHT) {
+            mask |= XCB_CONFIG_WINDOW_HEIGHT;
+            values[i++] = event->height;
+        }
+
+        xcb_configure_window(self.connection, event->window, mask, values);
+        return;
     }
+
+    // Framed client window - coordinate frame, titlebar, and client
+    XCBFrame *frame = (XCBFrame*)clientWindow.parentWindow;
+    XCBWindow *titlebarWindow = [frame childWindowForKey:TitleBar];
+
+    NSLog(@"Configure request for framed client window %u - coordinating frame %u",
+          event->window, frame.window);
+
+    // Get titlebar height
+    TitleBarSettingsService *tbSettings = [TitleBarSettingsService sharedInstance];
+    uint16_t titlebarHeight = tbSettings.height;
+
+    // Prepare configuration masks and values for all three windows
+    uint16_t frameMask = 0, clientMask = 0, titlebarMask = 0;
+    uint32_t frameValues[7], clientValues[7], titlebarValues[7];
+    int frameIndex = 0, clientIndex = 0, titlebarIndex = 0;
+
+    XCBRect currentFrameRect = frame.windowRect;
+    XCBRect newFrameRect = currentFrameRect;
+
+    // Handle width changes
     if (event->value_mask & XCB_CONFIG_WINDOW_WIDTH) {
-        mask |= XCB_CONFIG_WINDOW_WIDTH;
-        values[i++] = event->width;
+        frameMask |= XCB_CONFIG_WINDOW_WIDTH;
+        clientMask |= XCB_CONFIG_WINDOW_WIDTH;
+        titlebarMask |= XCB_CONFIG_WINDOW_WIDTH;
+
+        frameValues[frameIndex++] = event->width;
+        clientValues[clientIndex++] = event->width;
+        titlebarValues[titlebarIndex++] = event->width;
+
+        newFrameRect.size.width = event->width;
     }
+
+    // Handle height changes (frame = client + titlebar)
     if (event->value_mask & XCB_CONFIG_WINDOW_HEIGHT) {
-        mask |= XCB_CONFIG_WINDOW_HEIGHT;
-        values[i++] = event->height;
+        frameMask |= XCB_CONFIG_WINDOW_HEIGHT;
+        clientMask |= XCB_CONFIG_WINDOW_HEIGHT;
+
+        uint16_t frameHeight = event->height + titlebarHeight;
+        frameValues[frameIndex++] = frameHeight;
+        clientValues[clientIndex++] = event->height;
+
+        newFrameRect.size.height = frameHeight;
     }
-    if (event->value_mask & XCB_CONFIG_WINDOW_BORDER_WIDTH) {
-        mask |= XCB_CONFIG_WINDOW_BORDER_WIDTH;
-        values[i++] = event->border_width;
+
+    // Handle position changes (apply to frame only, client stays at offset)
+    if (event->value_mask & XCB_CONFIG_WINDOW_X) {
+        frameMask |= XCB_CONFIG_WINDOW_X;
+        frameValues[frameIndex++] = event->x;
+        newFrameRect.origin.x = event->x;
     }
-    if (event->value_mask & XCB_CONFIG_WINDOW_SIBLING) {
-        mask |= XCB_CONFIG_WINDOW_SIBLING;
-        values[i++] = event->sibling;
+
+    if (event->value_mask & XCB_CONFIG_WINDOW_Y) {
+        frameMask |= XCB_CONFIG_WINDOW_Y;
+        frameValues[frameIndex++] = event->y - titlebarHeight; // Adjust for titlebar
+        newFrameRect.origin.y = event->y - titlebarHeight;
     }
-    if (event->value_mask & XCB_CONFIG_WINDOW_STACK_MODE) {
-        mask |= XCB_CONFIG_WINDOW_STACK_MODE;
-        values[i++] = event->stack_mode;
+
+    // Apply configuration to all three windows
+    if (frameMask) {
+        xcb_configure_window(self.connection, frame.window, frameMask, frameValues);
+        frame.windowRect = newFrameRect;
+        NSLog(@"Configured frame %u: %dx%d at (%d,%d)",
+              frame.window, (int)newFrameRect.size.width, (int)newFrameRect.size.height,
+              (int)newFrameRect.origin.x, (int)newFrameRect.origin.y);
     }
-    
-    xcb_configure_window(self.connection, event->window, mask, values);
+
+    if (titlebarMask && titlebarWindow) {
+        xcb_configure_window(self.connection, titlebarWindow.window, titlebarMask, titlebarValues);
+        NSLog(@"Configured titlebar %u width: %d", titlebarWindow.window, titlebarValues[0]);
+    }
+
+    if (clientMask) {
+        xcb_configure_window(self.connection, clientWindow.window, clientMask, clientValues);
+        NSLog(@"Configured client %u: %dx%d",
+              clientWindow.window, clientValues[0],
+              clientIndex > 1 ? clientValues[1] : (int)currentFrameRect.size.height);
+    }
+
+    // CRITICAL: Send synthetic configure notify event (ICCCM compliance)
+    [frame configureClient];
+
+    [self flush];
 }
 
 - (void)handleConfigureWindowRequest:(xcb_configure_request_event_t*)event {
@@ -1474,24 +1816,6 @@ static XCBConnection *sharedConnection = nil;
         return NO;
     }
 
-    // Before considering it a normal window, check size heuristics
-    // Context menus are typically small even if they don't set proper type hints
-    xcb_get_geometry_cookie_t geom_cookie = xcb_get_geometry(self.connection, window);
-    xcb_get_geometry_reply_t *geom_reply = xcb_get_geometry_reply(self.connection, geom_cookie, NULL);
-
-    if (geom_reply) {
-        uint16_t width = geom_reply->width;
-        uint16_t height = geom_reply->height;
-        NSLog(@"Window %u geometry: %dx%d", window, width, height);
-
-        // Context menus are typically small and narrow
-        if (width < 300 && height < 400) {
-            NSLog(@"Window %u is small (%dx%d), likely context menu, no decoration", window, width, height);
-            free(geom_reply);
-            return NO;
-        }
-        free(geom_reply);
-    }
 
     // Default: normal windows get decorated
     NSLog(@"Window %u is normal type, will be decorated", window);
@@ -1530,23 +1854,6 @@ static XCBConnection *sharedConnection = nil;
         free(transient_reply);
     }
 
-    // Check window geometry - context menus are typically small
-    xcb_get_geometry_cookie_t geom_cookie = xcb_get_geometry(self.connection, window);
-    xcb_get_geometry_reply_t *geom_reply = xcb_get_geometry_reply(self.connection, geom_cookie, NULL);
-
-    if (geom_reply) {
-        uint16_t width = geom_reply->width;
-        uint16_t height = geom_reply->height;
-        NSLog(@"Window %u geometry: %dx%d", window, width, height);
-
-        // Context menus are typically small and narrow
-        if (width < 300 && height < 400) {
-            NSLog(@"Window %u is small (%dx%d), likely context menu, no decoration", window, width, height);
-            free(geom_reply);
-            return NO;
-        }
-        free(geom_reply);
-    }
 
     // Not transient and not small, assume normal window
     NSLog(@"Window %u is normal type, will be decorated", window);
@@ -1720,7 +2027,8 @@ static XCBConnection *sharedConnection = nil;
     [ThemeRenderer renderGSThemeToWindow:frame
                                          frame:frame
                                          title:[titlebar windowTitle]
-                                        active:YES];
+                                        active:YES
+                               isGNUStepWindow:NO];
 
     [titlebar putWindowBackgroundWithPixmap:[titlebar pixmap]];
     [titlebar drawArea:[titlebar windowRect]];
