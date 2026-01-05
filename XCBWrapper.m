@@ -50,6 +50,177 @@ NSString * const ClientWindow = @"ClientWindow";
 
 @end
 
+#pragma mark - XCBCursor Implementation
+
+@implementation XCBCursor
+
+@synthesize connection;
+@synthesize context;
+@synthesize screen;
+@synthesize cursorPath;
+@synthesize cursor;
+@synthesize leftPointerName;
+@synthesize resizeBottomCursorName;
+@synthesize resizeRightCursorName;
+@synthesize cursors;
+@synthesize leftPointerSelected;
+@synthesize resizeBottomSelected;
+@synthesize resizeRightSelected;
+@synthesize resizeLeftCursorName;
+@synthesize resizeLeftSelected;
+@synthesize resizeBottomRightCornerCursorName;
+@synthesize resizeBottomRightCornerSelected;
+@synthesize resizeTopCursorName;
+@synthesize resizeTopSelected;
+
+- (instancetype)initWithConnection:(XCBConnection *)aConnection screen:(XCBScreen*)aScreen {
+    self = [super init];
+
+    if (self == nil) {
+        NSLog(@"Unable to init XCBCursor...");
+        return nil;
+    }
+
+    connection = aConnection;
+    screen = aScreen;
+
+    BOOL success = [self createContext];
+
+    if (!success) {
+        NSLog(@"Error creating a new cursor context");
+        return self;
+    }
+
+    cursors = [[NSMutableDictionary alloc] init];
+
+    leftPointerName = @"left_ptr";
+    resizeBottomCursorName = @"s-resize";
+    resizeRightCursorName = @"w-resize";
+    resizeLeftCursorName = @"e-resize";
+    resizeBottomRightCornerCursorName = @"nwse-resize";
+    resizeTopCursorName = @"n-resize";
+
+    // Load all cursor types
+    cursor = xcb_cursor_load_cursor(context, [leftPointerName cString]);
+    [cursors setObject:[NSNumber numberWithUnsignedInt:cursor] forKey:leftPointerName];
+    cursor = xcb_cursor_load_cursor(context, [resizeBottomCursorName cString]);
+    [cursors setObject:[NSNumber numberWithUnsignedInt:cursor] forKey:resizeBottomCursorName];
+    cursor = xcb_cursor_load_cursor(context, [resizeRightCursorName cString]);
+    [cursors setObject:[NSNumber numberWithUnsignedInt:cursor] forKey:resizeRightCursorName];
+    cursor = xcb_cursor_load_cursor(context, [resizeLeftCursorName cString]);
+    [cursors setObject:[NSNumber numberWithUnsignedInt:cursor] forKey:resizeLeftCursorName];
+    cursor = xcb_cursor_load_cursor(context, [resizeBottomRightCornerCursorName cString]);
+    [cursors setObject:[NSNumber numberWithUnsignedInt:cursor] forKey:resizeBottomRightCornerCursorName];
+    cursor = xcb_cursor_load_cursor(context, [resizeTopCursorName cString]);
+    [cursors setObject:[NSNumber numberWithUnsignedInt:cursor] forKey:resizeTopCursorName];
+
+    return self;
+}
+
+- (xcb_cursor_t)selectLeftPointerCursor {
+    cursor = [[cursors objectForKey:leftPointerName] unsignedIntValue];
+    leftPointerSelected = YES;
+    resizeBottomSelected = NO;
+    resizeRightSelected = NO;
+    resizeLeftSelected = NO;
+    resizeTopSelected = NO;
+    resizeBottomRightCornerSelected = NO;
+    return cursor;
+}
+
+- (xcb_cursor_t)selectResizeCursorForPosition:(MousePosition)position {
+    switch (position) {
+        case BottomBorder:
+            cursor = [[cursors objectForKey:resizeBottomCursorName] unsignedIntValue];
+            leftPointerSelected = NO;
+            resizeBottomSelected = YES;
+            resizeRightSelected = NO;
+            resizeLeftSelected = NO;
+            resizeBottomRightCornerSelected = NO;
+            resizeTopSelected = NO;
+            break;
+        case RightBorder:
+            cursor = [[cursors objectForKey:resizeRightCursorName] unsignedIntValue];
+            leftPointerSelected = NO;
+            resizeBottomSelected = NO;
+            resizeRightSelected = YES;
+            resizeLeftSelected = NO;
+            resizeBottomRightCornerSelected = NO;
+            resizeTopSelected = NO;
+            break;
+        case LeftBorder:
+            cursor = [[cursors objectForKey:resizeLeftCursorName] unsignedIntValue];
+            leftPointerSelected = NO;
+            resizeBottomSelected = NO;
+            resizeRightSelected = NO;
+            resizeLeftSelected = YES;
+            resizeBottomRightCornerSelected = NO;
+            resizeTopSelected = NO;
+            break;
+        case BottomRightCorner:
+            cursor = [[cursors objectForKey:resizeBottomRightCornerCursorName] unsignedIntValue];
+            leftPointerSelected = NO;
+            resizeBottomSelected = NO;
+            resizeRightSelected = NO;
+            resizeLeftSelected = NO;
+            resizeBottomRightCornerSelected = YES;
+            resizeTopSelected = NO;
+            break;
+        case TopBorder:
+            cursor = [[cursors objectForKey:resizeTopCursorName] unsignedIntValue];
+            leftPointerSelected = NO;
+            resizeBottomSelected = NO;
+            resizeRightSelected = NO;
+            resizeLeftSelected = NO;
+            resizeBottomRightCornerSelected = NO;
+            resizeTopSelected = YES;
+           break;
+        default:
+            break;
+    }
+
+    return cursor;
+}
+
+- (BOOL)createContext {
+    int success = xcb_cursor_context_new([connection connection], [screen screen], &context);
+
+    if (success < 0)
+        return NO;
+
+    return YES;
+}
+
+- (void)destroyContext {
+    if (context != NULL) {
+        xcb_cursor_context_free(context);
+        context = NULL;
+    }
+}
+
+- (void)destroyCursor {
+    xcb_free_cursor([connection connection], cursor);
+}
+
+- (void)dealloc {
+    connection = nil;
+    screen = nil;
+    cursorPath = nil;
+    cursors = nil;
+
+    resizeTopCursorName = nil;
+    resizeBottomRightCornerCursorName = nil;
+    resizeLeftCursorName = nil;
+    resizeRightCursorName = nil;
+    resizeBottomCursorName = nil;
+    leftPointerName = nil;
+
+    if (context != NULL)
+        [self destroyContext];
+}
+
+@end
+
 #pragma mark - XCBScreen Implementation
 
 @implementation XCBScreen
@@ -151,6 +322,53 @@ NSString * const ClientWindow = @"ClientWindow";
 - (void)maximizeToSize:(XCBSize)size andPosition:(XCBPoint)position {
     // Basic implementation for XCBWindow maximize
     self.windowRect = XCBMakeRect(position, size);
+}
+
+- (void)initCursor {
+    // Find the screen this window belongs to
+    XCBScreen *screen = nil;
+    for (XCBScreen *s in self.connection.screens) {
+        if (s != nil) {
+            screen = s;
+            break;
+        }
+    }
+
+    if (screen) {
+        self.cursor = [[XCBCursor alloc] initWithConnection:self.connection screen:screen];
+    }
+}
+
+- (void)showLeftPointerCursor {
+    if (self.cursor) {
+        [self.cursor selectLeftPointerCursor];
+        xcb_cursor_t crs = [self.cursor cursor];
+        [self changeAttributes:&crs withMask:XCB_CW_CURSOR checked:NO];
+    }
+}
+
+- (void)showResizeCursorForPosition:(MousePosition)position {
+    if (self.cursor) {
+        [self.cursor selectResizeCursorForPosition:position];
+        xcb_cursor_t crs = [self.cursor cursor];
+        [self changeAttributes:&crs withMask:XCB_CW_CURSOR checked:NO];
+    }
+}
+
+- (void)changeAttributes:(const void*)valueList withMask:(uint32_t)valueMask checked:(BOOL)checked {
+    if (self.window != XCB_NONE && self.connection) {
+        xcb_void_cookie_t cookie = xcb_change_window_attributes([self.connection connection],
+                                                               self.window,
+                                                               valueMask,
+                                                               valueList);
+        if (checked) {
+            xcb_generic_error_t *error = xcb_request_check([self.connection connection], cookie);
+            if (error) {
+                NSLog(@"Error changing window attributes: %d", error->error_code);
+                free(error);
+            }
+        }
+    }
 }
 
 @end
@@ -279,6 +497,9 @@ NSString * const ClientWindow = @"ClientWindow";
 
         // Generate frame window ID
         self.window = xcb_generate_id(connection.connection);
+
+        // Initialize cursor handling
+        [self initCursor];
     }
     return self;
 }
@@ -542,6 +763,26 @@ NSString * const ClientWindow = @"ClientWindow";
     if (nearBottom) return RESIZE_EDGE_BOTTOM;
 
     return RESIZE_EDGE_NONE;
+}
+
+- (MousePosition)mousePositionForResizeEdge:(int)resizeEdge {
+    switch (resizeEdge) {
+        case RESIZE_EDGE_LEFT:
+            return LeftBorder;
+        case RESIZE_EDGE_RIGHT:
+            return RightBorder;
+        case RESIZE_EDGE_TOP:
+            return TopBorder;
+        case RESIZE_EDGE_BOTTOM:
+            return BottomBorder;
+        case RESIZE_EDGE_BOTTOMRIGHT:
+        case RESIZE_EDGE_BOTTOMLEFT:
+        case RESIZE_EDGE_TOPRIGHT:
+        case RESIZE_EDGE_TOPLEFT:
+            return BottomRightCorner;  // Use one corner cursor for all corners
+        default:
+            return None;
+    }
 }
 
 @end
@@ -927,6 +1168,11 @@ static XCBConnection *sharedConnection = nil;
         }
 
         // Grab the pointer to ensure we receive all motion events
+        xcb_cursor_t grab_cursor = XCB_NONE;
+        if (frame.cursor) {
+            grab_cursor = [frame.cursor cursor];
+        }
+
         xcb_grab_pointer(self.connection,
                         0, // owner_events
                         event->event,
@@ -934,7 +1180,7 @@ static XCBConnection *sharedConnection = nil;
                         XCB_GRAB_MODE_ASYNC,
                         XCB_GRAB_MODE_ASYNC,
                         XCB_NONE, // confine_to
-                        XCB_NONE, // cursor
+                        grab_cursor, // cursor
                         XCB_CURRENT_TIME);
     }
 }
@@ -1096,6 +1342,17 @@ static XCBConnection *sharedConnection = nil;
             [frame moveToPosition:newPosition];
         }
         [frame resizeFrame:newSize];
+    } else if (frame && !frame.isDragging && !frame.isResizing) {
+        // Handle cursor changes when hovering over resize edges
+        XCBPoint mousePoint = XCBMakePoint(event->event_x, event->event_y);
+        int resizeEdge = [frame resizeEdgeForPoint:mousePoint inFrame:frame.windowRect];
+
+        if (resizeEdge != RESIZE_EDGE_NONE) {
+            MousePosition position = [frame mousePositionForResizeEdge:resizeEdge];
+            [frame showResizeCursorForPosition:position];
+        } else {
+            [frame showLeftPointerCursor];
+        }
     } else {
         // Handle resize motion if this is a resize operation (legacy)
         [self handleResizeDuringMotion:event];

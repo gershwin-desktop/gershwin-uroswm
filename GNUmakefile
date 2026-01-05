@@ -24,7 +24,7 @@ $(APP_NAME)_HEADER_FILES = \
 		ThemeRenderer.h \
 		XCBWrapper.h
 
-$(APP_NAME)_GUI_LIBS = -lxcb -lxcb-icccm $(shell pkg-config --libs xcb)
+$(APP_NAME)_GUI_LIBS = -lxcb -lxcb-icccm -lxcb-cursor $(shell pkg-config --libs xcb)
 
 ADDITIONAL_OBJCFLAGS = -std=c99 -g -O0 -fobjc-arc -Wall -Wno-typedef-redefinition #-Wno-unused -Werror -Wall
 

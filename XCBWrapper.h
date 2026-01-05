@@ -10,6 +10,7 @@
 #import <AppKit/AppKit.h>
 #import <xcb/xcb.h>
 #import <xcb/xcb_icccm.h>
+#import <xcb/xcb_cursor.h>
 #import "ThemeRenderer.h"
 
 // Forward declarations
@@ -19,6 +20,7 @@
 @class XCBTitleBar;
 @class XCBScreen;
 @class XCBVisual;
+@class XCBCursor;
 @class WindowManagerDelegate;
 
 // Constants for child window keys
@@ -42,6 +44,17 @@ extern NSString * const ClientWindow;
 typedef NS_ENUM(NSInteger, ETitleBarColor) {
     ETitleBarColorInactive = 0,
     ETitleBarColorActive = 1
+};
+
+// Mouse position enum for cursor handling
+typedef NS_ENUM(NSInteger, MousePosition) {
+    RightBorder,
+    LeftBorder,
+    TopBorder,
+    BottomBorder,
+    BottomRightCorner,
+    Error,
+    None
 };
 
 // Simple Point structure
@@ -95,6 +108,38 @@ static inline XCBRect XCBMakeRect(XCBPoint origin, XCBSize size) {
 
 @end
 
+#pragma mark - XCBCursor
+
+@interface XCBCursor : NSObject
+
+@property (strong, nonatomic) XCBConnection *connection;
+@property (strong, nonatomic) XCBScreen *screen;
+@property (nonatomic) xcb_cursor_context_t *context;
+@property (strong, nonatomic) NSString *cursorPath;
+@property (nonatomic) xcb_cursor_t cursor;
+@property (strong, nonatomic) NSMutableDictionary *cursors;
+@property (strong, nonatomic) NSString *leftPointerName;
+@property (strong, nonatomic) NSString *resizeBottomCursorName;
+@property (strong, nonatomic) NSString *resizeRightCursorName;
+@property (strong, nonatomic) NSString *resizeLeftCursorName;
+@property (strong, nonatomic) NSString *resizeTopCursorName;
+@property (strong, nonatomic) NSString *resizeBottomRightCornerCursorName;
+@property (assign, nonatomic) BOOL leftPointerSelected;
+@property (assign, nonatomic) BOOL resizeBottomSelected;
+@property (assign, nonatomic) BOOL resizeRightSelected;
+@property (assign, nonatomic) BOOL resizeLeftSelected;
+@property (assign, nonatomic) BOOL resizeBottomRightCornerSelected;
+@property (assign, nonatomic) BOOL resizeTopSelected;
+
+- (instancetype)initWithConnection:(XCBConnection *)aConnection screen:(XCBScreen*)aScreen;
+- (BOOL)createContext;
+- (void)destroyContext;
+- (void)destroyCursor;
+- (xcb_cursor_t)selectLeftPointerCursor;
+- (xcb_cursor_t)selectResizeCursorForPosition:(MousePosition)position;
+
+@end
+
 #pragma mark - XCBScreen
 
 @interface XCBScreen : NSObject
@@ -118,6 +163,7 @@ static inline XCBRect XCBMakeRect(XCBPoint origin, XCBSize size) {
 @property (strong, nonatomic) NSString *windowTitle;
 @property (strong, nonatomic) XCBWindow *parentWindow;
 @property (assign, nonatomic) XCBRect windowRect;
+@property (strong, nonatomic) XCBCursor *cursor;
 
 - (instancetype)init;
 - (void)setWindow:(xcb_window_t)window;
@@ -125,6 +171,10 @@ static inline XCBRect XCBMakeRect(XCBPoint origin, XCBSize size) {
 - (XCBRect)windowRect;
 - (void)close;
 - (void)maximizeToSize:(XCBSize)size andPosition:(XCBPoint)position;
+- (void)initCursor;
+- (void)showLeftPointerCursor;
+- (void)showResizeCursorForPosition:(MousePosition)position;
+- (void)changeAttributes:(const void*)valueList withMask:(uint32_t)valueMask checked:(BOOL)checked;
 
 @end
 
@@ -181,6 +231,7 @@ static inline XCBRect XCBMakeRect(XCBPoint origin, XCBSize size) {
 - (void)configureClient;
 - (void)resizeFrame:(XCBSize)newSize;
 - (int)resizeEdgeForPoint:(XCBPoint)point inFrame:(XCBRect)frameRect;
+- (MousePosition)mousePositionForResizeEdge:(int)resizeEdge;
 
 @end
 
