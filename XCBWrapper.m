@@ -1396,7 +1396,11 @@ static XCBConnection *sharedConnection = nil;
     [self adjustBorderForFixedSizeWindow:event->window];
 
     // Apply GSTheme decoration (we only reach here for windows that should be decorated)
-    NSString *windowTitle = @"";
+    NSString *windowTitle = [self getWindowTitle:event->window];
+
+    // Set the window title on both client window and titlebar
+    clientWindow.windowTitle = windowTitle;
+    titlebar.windowTitle = windowTitle;
 
     BOOL themeSuccess = [ThemeRenderer renderGSThemeToWindow:clientWindow
                                                       frame:frame
@@ -1639,8 +1643,74 @@ static XCBConnection *sharedConnection = nil;
 }
 
 - (void)handlePropertyNotify:(xcb_property_notify_event_t*)event {
-    // Minimal implementation
-    // NSLog(@"Property notify for window %u", event->window);
+    if (!event) return;
+
+    // Check if this is a window title change
+    BOOL isTitleChange = NO;
+
+    // Check for WM_NAME property change
+    if (event->atom == XCB_ATOM_WM_NAME) {
+        isTitleChange = YES;
+        NSLog(@"WM_NAME property changed for window %u", event->window);
+    } else {
+        // Check for _NET_WM_NAME property change
+        xcb_intern_atom_cookie_t net_wm_name_cookie = xcb_intern_atom(self.connection, 0, 12, "_NET_WM_NAME");
+        xcb_intern_atom_reply_t *net_wm_name_reply = xcb_intern_atom_reply(self.connection, net_wm_name_cookie, NULL);
+
+        if (net_wm_name_reply && event->atom == net_wm_name_reply->atom) {
+            isTitleChange = YES;
+            NSLog(@"_NET_WM_NAME property changed for window %u", event->window);
+        }
+        if (net_wm_name_reply) free(net_wm_name_reply);
+    }
+
+    if (isTitleChange) {
+        // Find the client window and update its title
+        XCBWindow *clientWindow = [self windowForXCBId:event->window];
+        if (!clientWindow) {
+            // This might be a notification for an unmapped window
+            NSLog(@"Title change for unknown window %u", event->window);
+            return;
+        }
+
+        // Get the new title
+        NSString *newTitle = [self getWindowTitle:event->window];
+        NSLog(@"Title changed for window %u: '%@'", event->window, newTitle);
+
+        // Update the window title
+        clientWindow.windowTitle = newTitle;
+
+        // If this client window has a frame, update the titlebar too
+        if (clientWindow.parentWindow && [clientWindow.parentWindow isKindOfClass:[XCBFrame class]]) {
+            XCBFrame *frame = (XCBFrame*)clientWindow.parentWindow;
+            XCBWindow *titlebarWindow = [frame childWindowForKey:TitleBar];
+
+            if (titlebarWindow && [titlebarWindow isKindOfClass:[XCBTitleBar class]]) {
+                XCBTitleBar *titlebar = (XCBTitleBar*)titlebarWindow;
+                titlebar.windowTitle = newTitle;
+
+                // Check if this is a GNUstep window
+                BOOL isGNUStepWindow = [ThemeRenderer isGNUStepWindow:event->window connection:self];
+
+                // Re-render the titlebar with the new title
+                BOOL success = [ThemeRenderer renderGSThemeToWindow:clientWindow
+                                                              frame:frame
+                                                              title:newTitle
+                                                             active:titlebar.isActive
+                                                    isGNUStepWindow:isGNUStepWindow];
+
+                if (success) {
+                    // Update the titlebar display
+                    [titlebar putWindowBackgroundWithPixmap:[titlebar pixmap]];
+                    [titlebar drawArea:[titlebar windowRect]];
+                    [self flush];
+                    NSLog(@"Titlebar re-rendered with new title: '%@'", newTitle);
+                } else {
+                    NSLog(@"Failed to re-render titlebar with new title: '%@'", newTitle);
+                }
+            }
+        }
+    }
 }
 
 - (void)handleClientMessage:(xcb_client_message_event_t*)event {
@@ -2196,6 +2266,86 @@ static XCBConnection *sharedConnection = nil;
     } @catch (NSException *exception) {
         NSLog(@"Exception in handleResizeComplete: %@", exception.reason);
     }
+}
+
+#pragma mark - Window Title Retrieval
+
+- (NSString*)getWindowTitle:(xcb_window_t)window {
+    if (!self.connection || window == XCB_NONE) {
+        return @"";
+    }
+
+    NSString *title = @"";
+
+    // Try to get _NET_WM_NAME first (UTF-8 encoded)
+    xcb_intern_atom_cookie_t net_wm_name_cookie = xcb_intern_atom(self.connection, 0, 12, "_NET_WM_NAME");
+    xcb_intern_atom_reply_t *net_wm_name_reply = xcb_intern_atom_reply(self.connection, net_wm_name_cookie, NULL);
+
+    if (net_wm_name_reply) {
+        xcb_atom_t net_wm_name_atom = net_wm_name_reply->atom;
+        free(net_wm_name_reply);
+
+        xcb_get_property_cookie_t prop_cookie = xcb_get_property(self.connection, 0, window,
+                                                                net_wm_name_atom, XCB_ATOM_ANY, 0, UINT32_MAX);
+        xcb_get_property_reply_t *prop_reply = xcb_get_property_reply(self.connection, prop_cookie, NULL);
+
+        if (prop_reply && xcb_get_property_value_length(prop_reply) > 0) {
+            const char *name = (const char*)xcb_get_property_value(prop_reply);
+            NSUInteger length = xcb_get_property_value_length(prop_reply);
+            title = [[NSString alloc] initWithBytes:name length:length encoding:NSUTF8StringEncoding];
+            free(prop_reply);
+
+            if (title && [title length] > 0) {
+                NSLog(@"Retrieved _NET_WM_NAME for window %u: '%@'", window, title);
+                return title;
+            }
+        }
+        if (prop_reply) free(prop_reply);
+    }
+
+    // Fallback to WM_NAME (standard ICCCM property)
+    xcb_get_property_cookie_t wm_name_cookie = xcb_icccm_get_wm_name(self.connection, window);
+    xcb_icccm_get_text_property_reply_t wm_name_reply;
+
+    if (xcb_icccm_get_wm_name_reply(self.connection, wm_name_cookie, &wm_name_reply, NULL)) {
+        if (wm_name_reply.name && wm_name_reply.name_len > 0) {
+            title = [[NSString alloc] initWithBytes:wm_name_reply.name
+                                             length:wm_name_reply.name_len
+                                           encoding:NSUTF8StringEncoding];
+
+            if (!title) {
+                // Try with Latin-1 encoding if UTF-8 fails
+                title = [[NSString alloc] initWithBytes:wm_name_reply.name
+                                                 length:wm_name_reply.name_len
+                                               encoding:NSISOLatin1StringEncoding];
+            }
+        }
+        xcb_icccm_get_text_property_reply_wipe(&wm_name_reply);
+
+        if (title && [title length] > 0) {
+            NSLog(@"Retrieved WM_NAME for window %u: '%@'", window, title);
+            return title;
+        }
+    }
+
+    // If no title found, try to get the window class for fallback
+    xcb_get_property_cookie_t class_cookie = xcb_icccm_get_wm_class(self.connection, window);
+    xcb_icccm_get_wm_class_reply_t class_reply;
+
+    if (xcb_icccm_get_wm_class_reply(self.connection, class_cookie, &class_reply, NULL)) {
+        if (class_reply.class_name && strlen(class_reply.class_name) > 0) {
+            title = [NSString stringWithUTF8String:class_reply.class_name];
+            NSLog(@"Using WM_CLASS as fallback title for window %u: '%@'", window, title);
+        }
+        xcb_icccm_get_wm_class_reply_wipe(&class_reply);
+    }
+
+    if (!title || [title length] == 0) {
+        title = [NSString stringWithFormat:@"Window %u", window];
+        NSLog(@"No title found for window %u, using fallback: '%@'", window, title);
+    }
+
+    return title;
 }
 
 @end

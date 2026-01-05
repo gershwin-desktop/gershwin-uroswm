@@ -281,6 +281,9 @@ static inline XCBRect XCBMakeRect(XCBPoint origin, XCBSize size) {
 - (BOOL)shouldDecorateWindow:(xcb_window_t)window;
 - (BOOL)shouldDecorateTransientWindow:(xcb_window_t)window;
 
+// Window title retrieval
+- (NSString*)getWindowTitle:(xcb_window_t)window;
+
 // GSTheme Integration Methods (XCB-specific integration)
 - (void)applyFocusChangeToWindow:(xcb_window_t)windowId isActive:(BOOL)isActive;
 - (BOOL)handleTitlebarButtonPress:(xcb_button_press_event_t*)pressEvent;
