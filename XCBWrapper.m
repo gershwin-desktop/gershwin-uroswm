@@ -69,7 +69,13 @@ NSString * const ClientWindow = @"ClientWindow";
 @synthesize resizeLeftCursorName;
 @synthesize resizeLeftSelected;
 @synthesize resizeBottomRightCornerCursorName;
+@synthesize resizeBottomLeftCornerCursorName;
+@synthesize resizeTopRightCornerCursorName;
+@synthesize resizeTopLeftCornerCursorName;
 @synthesize resizeBottomRightCornerSelected;
+@synthesize resizeBottomLeftCornerSelected;
+@synthesize resizeTopRightCornerSelected;
+@synthesize resizeTopLeftCornerSelected;
 @synthesize resizeTopCursorName;
 @synthesize resizeTopSelected;
 
@@ -97,22 +103,151 @@ NSString * const ClientWindow = @"ClientWindow";
     resizeBottomCursorName = @"s-resize";
     resizeRightCursorName = @"w-resize";
     resizeLeftCursorName = @"e-resize";
-    resizeBottomRightCornerCursorName = @"nwse-resize";
     resizeTopCursorName = @"n-resize";
+    resizeBottomRightCornerCursorName = @"nwse-resize";
+    resizeBottomLeftCornerCursorName = @"nesw-resize";
+    resizeTopRightCornerCursorName = @"nesw-resize";
+    resizeTopLeftCornerCursorName = @"nwse-resize";
 
-    // Load all cursor types
+    // Load all cursor types using both theme names and font-based fallbacks
+    NSLog(@"=== LOADING CURSORS ===");
+
+    NSLog(@"Loading cursor: %@", leftPointerName);
     cursor = xcb_cursor_load_cursor(context, [leftPointerName cString]);
+    if (cursor == 0) {
+        NSLog(@"Theme cursor failed, trying font cursor");
+        // Fallback to standard X11 font cursor (left pointer = 68)
+        xcb_font_t font = xcb_generate_id([connection connection]);
+        xcb_open_font([connection connection], font, strlen("cursor"), "cursor");
+        cursor = xcb_generate_id([connection connection]);
+        xcb_create_glyph_cursor([connection connection], cursor, font, font,
+                               68, 69, 0, 0, 0, 65535, 65535, 65535);
+        xcb_close_font([connection connection], font);
+    }
+    NSLog(@"Final cursor ID for %@: %u", leftPointerName, cursor);
     [cursors setObject:[NSNumber numberWithUnsignedInt:cursor] forKey:leftPointerName];
+
+    NSLog(@"Loading cursor: %@", resizeBottomCursorName);
     cursor = xcb_cursor_load_cursor(context, [resizeBottomCursorName cString]);
+    if (cursor == 0) {
+        NSLog(@"Theme cursor failed, trying font cursor");
+        // Fallback to bottom_side cursor (16)
+        xcb_font_t font = xcb_generate_id([connection connection]);
+        xcb_open_font([connection connection], font, strlen("cursor"), "cursor");
+        cursor = xcb_generate_id([connection connection]);
+        xcb_create_glyph_cursor([connection connection], cursor, font, font,
+                               16, 17, 0, 0, 0, 65535, 65535, 65535);
+        xcb_close_font([connection connection], font);
+    }
+    NSLog(@"Final cursor ID for %@: %u", resizeBottomCursorName, cursor);
     [cursors setObject:[NSNumber numberWithUnsignedInt:cursor] forKey:resizeBottomCursorName];
+
+    NSLog(@"Loading cursor: %@", resizeRightCursorName);
     cursor = xcb_cursor_load_cursor(context, [resizeRightCursorName cString]);
+    if (cursor == 0) {
+        NSLog(@"Theme cursor failed, trying font cursor");
+        // Fallback to right_side cursor (96)
+        xcb_font_t font = xcb_generate_id([connection connection]);
+        xcb_open_font([connection connection], font, strlen("cursor"), "cursor");
+        cursor = xcb_generate_id([connection connection]);
+        xcb_create_glyph_cursor([connection connection], cursor, font, font,
+                               96, 97, 0, 0, 0, 65535, 65535, 65535);
+        xcb_close_font([connection connection], font);
+    }
+    NSLog(@"Final cursor ID for %@: %u", resizeRightCursorName, cursor);
     [cursors setObject:[NSNumber numberWithUnsignedInt:cursor] forKey:resizeRightCursorName];
+
+    NSLog(@"Loading cursor: %@", resizeLeftCursorName);
     cursor = xcb_cursor_load_cursor(context, [resizeLeftCursorName cString]);
+    if (cursor == 0) {
+        NSLog(@"Theme cursor failed, trying font cursor");
+        // Fallback to left_side cursor (70)
+        xcb_font_t font = xcb_generate_id([connection connection]);
+        xcb_open_font([connection connection], font, strlen("cursor"), "cursor");
+        cursor = xcb_generate_id([connection connection]);
+        xcb_create_glyph_cursor([connection connection], cursor, font, font,
+                               70, 71, 0, 0, 0, 65535, 65535, 65535);
+        xcb_close_font([connection connection], font);
+    }
+    NSLog(@"Final cursor ID for %@: %u", resizeLeftCursorName, cursor);
     [cursors setObject:[NSNumber numberWithUnsignedInt:cursor] forKey:resizeLeftCursorName];
+
+    NSLog(@"Loading cursor: %@", resizeBottomRightCornerCursorName);
     cursor = xcb_cursor_load_cursor(context, [resizeBottomRightCornerCursorName cString]);
+    if (cursor == 0) {
+        NSLog(@"Theme cursor failed, trying font cursor");
+        // Fallback to bottom_right_corner cursor (14)
+        xcb_font_t font = xcb_generate_id([connection connection]);
+        xcb_open_font([connection connection], font, strlen("cursor"), "cursor");
+        cursor = xcb_generate_id([connection connection]);
+        xcb_create_glyph_cursor([connection connection], cursor, font, font,
+                               14, 15, 0, 0, 0, 65535, 65535, 65535);
+        xcb_close_font([connection connection], font);
+    }
+    NSLog(@"Final cursor ID for %@: %u", resizeBottomRightCornerCursorName, cursor);
     [cursors setObject:[NSNumber numberWithUnsignedInt:cursor] forKey:resizeBottomRightCornerCursorName];
+
+    NSLog(@"Loading cursor: %@", resizeTopCursorName);
     cursor = xcb_cursor_load_cursor(context, [resizeTopCursorName cString]);
+    if (cursor == 0) {
+        NSLog(@"Theme cursor failed, trying font cursor");
+        // Fallback to top_side cursor (138)
+        xcb_font_t font = xcb_generate_id([connection connection]);
+        xcb_open_font([connection connection], font, strlen("cursor"), "cursor");
+        cursor = xcb_generate_id([connection connection]);
+        xcb_create_glyph_cursor([connection connection], cursor, font, font,
+                               138, 139, 0, 0, 0, 65535, 65535, 65535);
+        xcb_close_font([connection connection], font);
+    }
+    NSLog(@"Final cursor ID for %@: %u", resizeTopCursorName, cursor);
     [cursors setObject:[NSNumber numberWithUnsignedInt:cursor] forKey:resizeTopCursorName];
+
+    NSLog(@"Loading cursor: %@", resizeBottomLeftCornerCursorName);
+    cursor = xcb_cursor_load_cursor(context, [resizeBottomLeftCornerCursorName cString]);
+    if (cursor == 0) {
+        NSLog(@"Theme cursor failed, trying font cursor");
+        // Fallback to bottom_left_corner cursor (12)
+        xcb_font_t font = xcb_generate_id([connection connection]);
+        xcb_open_font([connection connection], font, strlen("cursor"), "cursor");
+        cursor = xcb_generate_id([connection connection]);
+        xcb_create_glyph_cursor([connection connection], cursor, font, font,
+                               12, 13, 0, 0, 0, 65535, 65535, 65535);
+        xcb_close_font([connection connection], font);
+    }
+    NSLog(@"Final cursor ID for %@: %u", resizeBottomLeftCornerCursorName, cursor);
+    [cursors setObject:[NSNumber numberWithUnsignedInt:cursor] forKey:resizeBottomLeftCornerCursorName];
+
+    NSLog(@"Loading cursor: %@", resizeTopRightCornerCursorName);
+    cursor = xcb_cursor_load_cursor(context, [resizeTopRightCornerCursorName cString]);
+    if (cursor == 0) {
+        NSLog(@"Theme cursor failed, trying font cursor");
+        // Fallback to top_right_corner cursor (136)
+        xcb_font_t font = xcb_generate_id([connection connection]);
+        xcb_open_font([connection connection], font, strlen("cursor"), "cursor");
+        cursor = xcb_generate_id([connection connection]);
+        xcb_create_glyph_cursor([connection connection], cursor, font, font,
+                               136, 137, 0, 0, 0, 65535, 65535, 65535);
+        xcb_close_font([connection connection], font);
+    }
+    NSLog(@"Final cursor ID for %@: %u", resizeTopRightCornerCursorName, cursor);
+    [cursors setObject:[NSNumber numberWithUnsignedInt:cursor] forKey:resizeTopRightCornerCursorName];
+
+    NSLog(@"Loading cursor: %@", resizeTopLeftCornerCursorName);
+    cursor = xcb_cursor_load_cursor(context, [resizeTopLeftCornerCursorName cString]);
+    if (cursor == 0) {
+        NSLog(@"Theme cursor failed, trying font cursor");
+        // Fallback to top_left_corner cursor (134)
+        xcb_font_t font = xcb_generate_id([connection connection]);
+        xcb_open_font([connection connection], font, strlen("cursor"), "cursor");
+        cursor = xcb_generate_id([connection connection]);
+        xcb_create_glyph_cursor([connection connection], cursor, font, font,
+                               134, 135, 0, 0, 0, 65535, 65535, 65535);
+        xcb_close_font([connection connection], font);
+    }
+    NSLog(@"Final cursor ID for %@: %u", resizeTopLeftCornerCursorName, cursor);
+    [cursors setObject:[NSNumber numberWithUnsignedInt:cursor] forKey:resizeTopLeftCornerCursorName];
+
+    NSLog(@"=== CURSOR LOADING COMPLETE ===");
 
     return self;
 }
@@ -157,6 +292,42 @@ NSString * const ClientWindow = @"ClientWindow";
             resizeBottomRightCornerSelected = NO;
             resizeTopSelected = NO;
             break;
+        case TopLeftCorner:
+            cursor = [[cursors objectForKey:resizeTopLeftCornerCursorName] unsignedIntValue];
+            leftPointerSelected = NO;
+            resizeBottomSelected = NO;
+            resizeRightSelected = NO;
+            resizeLeftSelected = NO;
+            resizeBottomRightCornerSelected = NO;
+            resizeBottomLeftCornerSelected = NO;
+            resizeTopRightCornerSelected = NO;
+            resizeTopLeftCornerSelected = YES;
+            resizeTopSelected = NO;
+            break;
+        case TopRightCorner:
+            cursor = [[cursors objectForKey:resizeTopRightCornerCursorName] unsignedIntValue];
+            leftPointerSelected = NO;
+            resizeBottomSelected = NO;
+            resizeRightSelected = NO;
+            resizeLeftSelected = NO;
+            resizeBottomRightCornerSelected = NO;
+            resizeBottomLeftCornerSelected = NO;
+            resizeTopRightCornerSelected = YES;
+            resizeTopLeftCornerSelected = NO;
+            resizeTopSelected = NO;
+            break;
+        case BottomLeftCorner:
+            cursor = [[cursors objectForKey:resizeBottomLeftCornerCursorName] unsignedIntValue];
+            leftPointerSelected = NO;
+            resizeBottomSelected = NO;
+            resizeRightSelected = NO;
+            resizeLeftSelected = NO;
+            resizeBottomRightCornerSelected = NO;
+            resizeBottomLeftCornerSelected = YES;
+            resizeTopRightCornerSelected = NO;
+            resizeTopLeftCornerSelected = NO;
+            resizeTopSelected = NO;
+            break;
         case BottomRightCorner:
             cursor = [[cursors objectForKey:resizeBottomRightCornerCursorName] unsignedIntValue];
             leftPointerSelected = NO;
@@ -164,6 +335,9 @@ NSString * const ClientWindow = @"ClientWindow";
             resizeRightSelected = NO;
             resizeLeftSelected = NO;
             resizeBottomRightCornerSelected = YES;
+            resizeBottomLeftCornerSelected = NO;
+            resizeTopRightCornerSelected = NO;
+            resizeTopLeftCornerSelected = NO;
             resizeTopSelected = NO;
             break;
         case TopBorder:
@@ -1361,12 +1535,44 @@ static XCBConnection *sharedConnection = nil;
         [frame resizeFrame:newSize];
     } else if (frame && !frame.isDragging && !frame.isResizing) {
         // Handle cursor changes when hovering over resize edges
-        XCBPoint mousePoint = XCBMakePoint(event->event_x, event->event_y);
-        int resizeEdge = [frame resizeEdgeForPoint:mousePoint inFrame:frame.windowRect];
+        // Use relative coordinates for border detection (like original XCBKit)
+        double frameWidth = frame.windowRect.size.width;
+        double frameHeight = frame.windowRect.size.height;
+        double mouseX = event->event_x;
+        double mouseY = event->event_y;
 
-        if (resizeEdge != RESIZE_EDGE_NONE) {
-            MousePosition position = [frame mousePositionForResizeEdge:resizeEdge];
+        // Debug logging (commented out)
+        // NSLog(@"Mouse motion: x=%.0f, y=%.0f, frame size=%.0fx%.0f",
+        //       mouseX, mouseY, frameWidth, frameHeight);
 
+        // Check if mouse is near edges (using same logic as original XCBKit)
+        BOOL nearLeft = (mouseX <= RESIZE_BORDER_WIDTH);
+        BOOL nearRight = (mouseX >= frameWidth - RESIZE_BORDER_WIDTH);
+        BOOL nearTop = (mouseY <= RESIZE_BORDER_WIDTH);
+        BOOL nearBottom = (mouseY >= frameHeight - RESIZE_BORDER_WIDTH);
+
+        MousePosition position = None;
+
+        // Corner detection takes precedence
+        if (nearTop && nearLeft) {
+            position = TopLeftCorner;
+        } else if (nearTop && nearRight) {
+            position = TopRightCorner;
+        } else if (nearBottom && nearLeft) {
+            position = BottomLeftCorner;
+        } else if (nearBottom && nearRight) {
+            position = BottomRightCorner;
+        } else if (nearLeft) {
+            position = LeftBorder;
+        } else if (nearRight) {
+            position = RightBorder;
+        } else if (nearTop) {
+            position = TopBorder;
+        } else if (nearBottom) {
+            position = BottomBorder;
+        }
+
+        if (position != None) {
             // Only change cursor if it's not already the right one (optimization from XCBKit)
             BOOL needsChange = NO;
             switch (position) {
@@ -1381,6 +1587,15 @@ static XCBConnection *sharedConnection = nil;
                     break;
                 case BottomBorder:
                     needsChange = ![frame.cursor resizeBottomSelected];
+                    break;
+                case TopLeftCorner:
+                    needsChange = ![frame.cursor resizeTopLeftCornerSelected];
+                    break;
+                case TopRightCorner:
+                    needsChange = ![frame.cursor resizeTopRightCornerSelected];
+                    break;
+                case BottomLeftCorner:
+                    needsChange = ![frame.cursor resizeBottomLeftCornerSelected];
                     break;
                 case BottomRightCorner:
                     needsChange = ![frame.cursor resizeBottomRightCornerSelected];

@@ -38,7 +38,7 @@ extern NSString * const ClientWindow;
 #define RESIZE_EDGE_BOTTOMLEFT  7
 #define RESIZE_EDGE_BOTTOMRIGHT 8
 
-#define RESIZE_BORDER_WIDTH 4  // Pixels from edge to detect resize
+#define RESIZE_BORDER_WIDTH 10  // Pixels from edge to detect resize (industry standard)
 
 // Titlebar color enum (from XCBKit)
 typedef NS_ENUM(NSInteger, ETitleBarColor) {
@@ -52,6 +52,9 @@ typedef NS_ENUM(NSInteger, MousePosition) {
     LeftBorder,
     TopBorder,
     BottomBorder,
+    TopLeftCorner,
+    TopRightCorner,
+    BottomLeftCorner,
     BottomRightCorner,
     Error,
     None
@@ -124,11 +127,17 @@ static inline XCBRect XCBMakeRect(XCBPoint origin, XCBSize size) {
 @property (strong, nonatomic) NSString *resizeLeftCursorName;
 @property (strong, nonatomic) NSString *resizeTopCursorName;
 @property (strong, nonatomic) NSString *resizeBottomRightCornerCursorName;
+@property (strong, nonatomic) NSString *resizeBottomLeftCornerCursorName;
+@property (strong, nonatomic) NSString *resizeTopRightCornerCursorName;
+@property (strong, nonatomic) NSString *resizeTopLeftCornerCursorName;
 @property (assign, nonatomic) BOOL leftPointerSelected;
 @property (assign, nonatomic) BOOL resizeBottomSelected;
 @property (assign, nonatomic) BOOL resizeRightSelected;
 @property (assign, nonatomic) BOOL resizeLeftSelected;
 @property (assign, nonatomic) BOOL resizeBottomRightCornerSelected;
+@property (assign, nonatomic) BOOL resizeBottomLeftCornerSelected;
+@property (assign, nonatomic) BOOL resizeTopRightCornerSelected;
+@property (assign, nonatomic) BOOL resizeTopLeftCornerSelected;
 @property (assign, nonatomic) BOOL resizeTopSelected;
 
 - (instancetype)initWithConnection:(XCBConnection *)aConnection screen:(XCBScreen*)aScreen;
