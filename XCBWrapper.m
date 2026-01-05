@@ -1745,7 +1745,7 @@ static XCBConnection *sharedConnection = nil;
     // Calculate frame geometry (client + titlebar + borders)
     TitleBarSettingsService *tbSettings = [TitleBarSettingsService sharedInstance];
     int titlebarHeight = tbSettings.height;
-    int borderWidth = isGNUStepWindowNeedingDecorations ? 0 : 1; // No borders for GNUstep windows
+    int borderWidth = 5; // 5px borders for all windows
 
     int frameX, frameY, frameWidth, frameHeight;
 
@@ -1818,7 +1818,7 @@ static XCBConnection *sharedConnection = nil;
     // Create frame window
     uint32_t frame_mask = XCB_CW_BACK_PIXEL | XCB_CW_EVENT_MASK;
     uint32_t frame_values[2];
-    frame_values[0] = screen.screen->white_pixel;
+    frame_values[0] = screen.screen->black_pixel;
     frame_values[1] = XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT |
                       XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY |
                       XCB_EVENT_MASK_BUTTON_PRESS |
@@ -1890,8 +1890,8 @@ static XCBConnection *sharedConnection = nil;
     [titlebar initCursor];
     
     // Reparent client window into frame
-    // GNUstep windows position at (0, titlebarHeight), regular windows at (borderWidth, titlebarHeight)
-    int clientX = isGNUStepWindowNeedingDecorations ? 0 : borderWidth;
+    // Both GNUstep and regular windows now position at (borderWidth, titlebarHeight)
+    int clientX = borderWidth;
     int clientY = titlebarHeight;
 
     xcb_reparent_window(self.connection,
