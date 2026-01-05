@@ -1077,8 +1077,25 @@ static XCBConnection *sharedConnection = nil;
 }
 
 - (void)handleEnterNotify:(xcb_enter_notify_event_t*)event {
-    // Minimal implementation
-    // NSLog(@"Enter notify for window %u", event->event);
+    // Initialize cursor when entering a window
+    XCBWindow *window = [self windowForXCBId:event->event];
+    if (window) {
+        // If entering a frame, show left pointer cursor initially
+        if ([window isKindOfClass:[XCBFrame class]]) {
+            XCBFrame *frame = (XCBFrame*)window;
+            if (frame.cursor && ![frame.cursor leftPointerSelected]) {
+                [frame showLeftPointerCursor];
+            }
+        } else if ([window isKindOfClass:[XCBTitleBar class]]) {
+            // For titlebar, ensure cursor is initialized
+            if (!window.cursor) {
+                [window initCursor];
+            }
+            if (window.cursor && ![window.cursor leftPointerSelected]) {
+                [window showLeftPointerCursor];
+            }
+        }
+    }
 }
 
 - (void)handleLeaveNotify:(xcb_leave_notify_event_t*)event {
@@ -1349,9 +1366,38 @@ static XCBConnection *sharedConnection = nil;
 
         if (resizeEdge != RESIZE_EDGE_NONE) {
             MousePosition position = [frame mousePositionForResizeEdge:resizeEdge];
-            [frame showResizeCursorForPosition:position];
+
+            // Only change cursor if it's not already the right one (optimization from XCBKit)
+            BOOL needsChange = NO;
+            switch (position) {
+                case RightBorder:
+                    needsChange = ![frame.cursor resizeRightSelected];
+                    break;
+                case LeftBorder:
+                    needsChange = ![frame.cursor resizeLeftSelected];
+                    break;
+                case TopBorder:
+                    needsChange = ![frame.cursor resizeTopSelected];
+                    break;
+                case BottomBorder:
+                    needsChange = ![frame.cursor resizeBottomSelected];
+                    break;
+                case BottomRightCorner:
+                    needsChange = ![frame.cursor resizeBottomRightCornerSelected];
+                    break;
+                default:
+                    needsChange = YES;
+                    break;
+            }
+
+            if (needsChange) {
+                [frame showResizeCursorForPosition:position];
+            }
         } else {
-            [frame showLeftPointerCursor];
+            // Only change to left pointer if not already selected
+            if (![frame.cursor leftPointerSelected]) {
+                [frame showLeftPointerCursor];
+            }
         }
     } else {
         // Handle resize motion if this is a resize operation (legacy)
@@ -1563,6 +1609,8 @@ static XCBConnection *sharedConnection = nil;
                       XCB_EVENT_MASK_BUTTON_PRESS |
                       XCB_EVENT_MASK_BUTTON_RELEASE |
                       XCB_EVENT_MASK_POINTER_MOTION |
+                      XCB_EVENT_MASK_ENTER_WINDOW |
+                      XCB_EVENT_MASK_LEAVE_WINDOW |
                       XCB_EVENT_MASK_EXPOSURE;
     
     xcb_create_window(self.connection,
@@ -1592,7 +1640,9 @@ static XCBConnection *sharedConnection = nil;
     tb_values[1] = XCB_EVENT_MASK_EXPOSURE |
                    XCB_EVENT_MASK_BUTTON_PRESS |
                    XCB_EVENT_MASK_BUTTON_RELEASE |
-                   XCB_EVENT_MASK_POINTER_MOTION;
+                   XCB_EVENT_MASK_POINTER_MOTION |
+                   XCB_EVENT_MASK_ENTER_WINDOW |
+                   XCB_EVENT_MASK_LEAVE_WINDOW;
     
     xcb_create_window(self.connection,
                      XCB_COPY_FROM_PARENT,
@@ -1620,6 +1670,9 @@ static XCBConnection *sharedConnection = nil;
     [frame setChildWindow:clientWindow forKey:ClientWindow];
     titlebar.parentWindow = frame;
     clientWindow.parentWindow = frame;
+
+    // Initialize cursor for titlebar
+    [titlebar initCursor];
     
     // Reparent client window into frame
     // GNUstep windows position at (0, titlebarHeight), regular windows at (borderWidth, titlebarHeight)
