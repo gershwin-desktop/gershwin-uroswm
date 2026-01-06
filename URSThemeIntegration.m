@@ -377,6 +377,31 @@ static NSMutableSet *fixedSizeWindows = nil;
 
 #pragma mark - Image Transfer
 
+// Create a dimmed/desaturated version of an image for inactive window decorations
++ (NSImage*)createDimmedImage:(NSImage*)image {
+    if (!image) return nil;
+
+    NSSize size = [image size];
+    NSImage *dimmedImage = [[NSImage alloc] initWithSize:size];
+
+    [dimmedImage lockFocus];
+
+    // Draw the original image
+    [image drawInRect:NSMakeRect(0, 0, size.width, size.height)
+             fromRect:NSZeroRect
+            operation:NSCompositeSourceOver
+             fraction:1.0];
+
+    // Apply desaturation overlay using a semi-transparent gray
+    // This reduces vibrancy while maintaining visibility
+    [[NSColor colorWithCalibratedWhite:0.5 alpha:0.35] set];
+    NSRectFillUsingOperation(NSMakeRect(0, 0, size.width, size.height), NSCompositeSourceAtop);
+
+    [dimmedImage unlockFocus];
+
+    return dimmedImage;
+}
+
 + (BOOL)transferImage:(NSImage*)image toTitlebar:(XCBTitleBar*)titlebar {
     // Convert NSImage to bitmap representation
     NSBitmapImageRep *bitmap = nil;
@@ -518,45 +543,78 @@ static NSMutableSet *fixedSizeWindows = nil;
     cairo_destroy(ctx);
     cairo_surface_destroy(x11Surface);
 
-    // ALSO paint to dPixmap (inactive pixmap) so unfocused windows don't show black
-    // XCBWindow.drawArea uses isAbove ? pixmap : dPixmap, so both need content
+    // Paint DIMMED version to dPixmap (inactive pixmap) for unfocused windows
+    // XCBWindow.drawArea uses isAbove ? pixmap : dPixmap
     xcb_pixmap_t dPixmap = [titlebar dPixmap];
     if (dPixmap != 0) {
-        NSLog(@"Also painting GSTheme to dPixmap (inactive pixmap): %u", dPixmap);
+        NSLog(@"Painting dimmed GSTheme to dPixmap (inactive pixmap): %u", dPixmap);
 
-        cairo_surface_t *dSurface = cairo_xcb_surface_create(
-            [titlebar.connection connection],
-            dPixmap,
-            titlebar.visual.visualType,
-            (int)image.size.width,
-            (int)image.size.height
-        );
-
-        if (cairo_surface_status(dSurface) == CAIRO_STATUS_SUCCESS) {
-            cairo_t *dCtx = cairo_create(dSurface);
-
-            // Recreate image surface (we need to redo RGBA->BGRA conversion)
-            // Note: bitmapPixels was already converted above, so we can reuse it
-            cairo_surface_t *dImageSurface = cairo_image_surface_create_for_data(
-                bitmapPixels,
-                CAIRO_FORMAT_ARGB32,
-                width,
-                height,
-                bytesPerRow
-            );
-
-            if (cairo_surface_status(dImageSurface) == CAIRO_STATUS_SUCCESS) {
-                cairo_set_operator(dCtx, CAIRO_OPERATOR_SOURCE);
-                cairo_set_source_surface(dCtx, dImageSurface, 0, 0);
-                cairo_paint(dCtx);
-                cairo_surface_flush(dSurface);
-                NSLog(@"GSTheme also painted to dPixmap successfully");
+        // Create a dimmed version of the titlebar image for inactive state
+        NSImage *dimmedImage = [self createDimmedImage:image];
+        if (dimmedImage) {
+            // Get bitmap from dimmed image
+            NSBitmapImageRep *dimmedBitmap = nil;
+            for (NSImageRep *rep in [dimmedImage representations]) {
+                if ([rep isKindOfClass:[NSBitmapImageRep class]]) {
+                    dimmedBitmap = (NSBitmapImageRep*)rep;
+                    break;
+                }
+            }
+            if (!dimmedBitmap) {
+                NSData *dimmedData = [dimmedImage TIFFRepresentation];
+                dimmedBitmap = [NSBitmapImageRep imageRepWithData:dimmedData];
             }
 
-            cairo_surface_destroy(dImageSurface);
-            cairo_destroy(dCtx);
+            if (dimmedBitmap) {
+                unsigned char *dimmedPixels = [dimmedBitmap bitmapData];
+                int dimmedWidth = [dimmedBitmap pixelsWide];
+                int dimmedHeight = [dimmedBitmap pixelsHigh];
+                int dimmedBytesPerRow = [dimmedBitmap bytesPerRow];
+
+                // Convert RGBA to BGRA for Cairo
+                for (int y = 0; y < dimmedHeight; y++) {
+                    for (int x = 0; x < dimmedWidth; x++) {
+                        int offset = (y * dimmedBytesPerRow) + (x * 4);
+                        unsigned char r = dimmedPixels[offset];
+                        unsigned char b = dimmedPixels[offset + 2];
+                        dimmedPixels[offset] = b;     // Blue
+                        dimmedPixels[offset + 2] = r; // Red
+                    }
+                }
+
+                cairo_surface_t *dSurface = cairo_xcb_surface_create(
+                    [titlebar.connection connection],
+                    dPixmap,
+                    titlebar.visual.visualType,
+                    dimmedWidth,
+                    dimmedHeight
+                );
+
+                if (cairo_surface_status(dSurface) == CAIRO_STATUS_SUCCESS) {
+                    cairo_t *dCtx = cairo_create(dSurface);
+
+                    cairo_surface_t *dImageSurface = cairo_image_surface_create_for_data(
+                        dimmedPixels,
+                        CAIRO_FORMAT_ARGB32,
+                        dimmedWidth,
+                        dimmedHeight,
+                        dimmedBytesPerRow
+                    );
+
+                    if (cairo_surface_status(dImageSurface) == CAIRO_STATUS_SUCCESS) {
+                        cairo_set_operator(dCtx, CAIRO_OPERATOR_SOURCE);
+                        cairo_set_source_surface(dCtx, dImageSurface, 0, 0);
+                        cairo_paint(dCtx);
+                        cairo_surface_flush(dSurface);
+                        NSLog(@"Dimmed GSTheme painted to dPixmap successfully");
+                    }
+
+                    cairo_surface_destroy(dImageSurface);
+                    cairo_destroy(dCtx);
+                }
+                cairo_surface_destroy(dSurface);
+            }
         }
-        cairo_surface_destroy(dSurface);
     }
 
     [titlebar.connection flush];
