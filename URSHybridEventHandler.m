@@ -13,10 +13,12 @@
 #import <XCBKit/XCBScreen.h>
 #import <xcb/xcb.h>
 #import <xcb/xcb_icccm.h>
+#import <X11/keysym.h>
 #import <XCBKit/services/EWMHService.h>
 #import <XCBKit/XCBFrame.h>
 #import "URSThemeIntegration.h"
 #import "GSThemeTitleBar.h"
+#import "URSWindowSwitcher.h"
 
 @implementation URSHybridEventHandler
 
@@ -25,6 +27,9 @@
 @synthesize xcbEventsIntegrated;
 @synthesize nsRunLoopActive;
 @synthesize eventCount;
+@synthesize windowSwitcher;
+@synthesize altKeyPressed;
+@synthesize shiftKeyPressed;
 
 #pragma mark - Initialization
 
@@ -44,6 +49,11 @@
 
     // Initialize XCB connection (same as original)
     connection = [XCBConnection sharedConnectionAsWindowManager:YES];
+
+    // Initialize window switcher
+    self.windowSwitcher = [URSWindowSwitcher sharedSwitcherWithConnection:connection];
+    self.altKeyPressed = NO;
+    self.shiftKeyPressed = NO;
 
     return self;
 }
@@ -68,6 +78,9 @@
     // Setup simple timer-based theme integration
     [self setupPeriodicThemeIntegration];
     NSLog(@"GSTheme integration initialized with periodic checking enabled");
+    
+    // Setup keyboard grabbing for Alt-Tab
+    [self setupKeyboardGrabbing];
 }
 
 - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender
@@ -337,6 +350,16 @@
         case XCB_PROPERTY_NOTIFY: {
             xcb_property_notify_event_t *propEvent = (xcb_property_notify_event_t *)event;
             [connection handlePropertyNotify:propEvent];
+            break;
+        }
+        case XCB_KEY_PRESS: {
+            xcb_key_press_event_t *keyPressEvent = (xcb_key_press_event_t *)event;
+            [self handleKeyPressEvent:keyPressEvent];
+            break;
+        }
+        case XCB_KEY_RELEASE: {
+            xcb_key_release_event_t *keyReleaseEvent = (xcb_key_release_event_t *)event;
+            [self handleKeyReleaseEvent:keyReleaseEvent];
             break;
         }
         default:
@@ -1188,6 +1211,158 @@
 
     } @catch (NSException *exception) {
         NSLog(@"Exception in rerenderTitlebarForFrame: %@", exception.reason);
+    }
+}
+
+#pragma mark - Keyboard Event Handling (Alt-Tab)
+
+- (void)setupKeyboardGrabbing {
+    NSLog(@"[Alt-Tab] Setting up keyboard grabbing");
+    
+    @try {
+        XCBScreen *screen = [[connection screens] objectAtIndex:0];
+        xcb_window_t root = [[screen rootWindow] window];
+        xcb_connection_t *conn = [connection connection];
+        
+        // Standard keycodes for Tab on most keyboards
+        // Tab is usually keycode 23 on X11 systems
+        // But we need to grab all variations
+        
+        // Get the keyboard mapping to find Tab key
+        xcb_get_keyboard_mapping_cookie_t cookie = xcb_get_keyboard_mapping(
+            conn,
+            8,   // min_keycode
+            248  // count (255 - 8 + 1)
+        );
+        
+        xcb_get_keyboard_mapping_reply_t *reply = xcb_get_keyboard_mapping_reply(conn, cookie, NULL);
+        if (!reply) {
+            NSLog(@"[Alt-Tab] ERROR: Failed to get keyboard mapping");
+            return;
+        }
+        
+        xcb_keysym_t *keysyms = xcb_get_keyboard_mapping_keysyms(reply);
+        int keysyms_len = xcb_get_keyboard_mapping_keysyms_length(reply);
+        
+        NSLog(@"[Alt-Tab] Found %d keysyms in keyboard mapping", keysyms_len);
+        
+        // Find Tab key and grab it
+        BOOL tabFound = NO;
+        for (int i = 0; i < keysyms_len; i++) {
+            if (keysyms[i] == XK_Tab) {
+                // Calculate keycode from index
+                // keycode = min_keycode + (index / keysyms_per_keycode)
+                xcb_keycode_t keycode = 8 + (i / reply->keysyms_per_keycode);
+                
+                NSLog(@"[Alt-Tab] Found Tab key at keycode %d", keycode);
+                
+                // Grab Alt+Tab
+                xcb_grab_key(conn,
+                           0,  // owner_events
+                           root,
+                           XCB_MOD_MASK_1,  // modifiers (Alt/Mod1)
+                           keycode,
+                           XCB_GRAB_MODE_ASYNC,
+                           XCB_GRAB_MODE_ASYNC);
+                
+                // Grab Shift+Alt+Tab
+                xcb_grab_key(conn,
+                           0,  // owner_events
+                           root,
+                           XCB_MOD_MASK_1 | XCB_MOD_MASK_SHIFT,  // Alt + Shift
+                           keycode,
+                           XCB_GRAB_MODE_ASYNC,
+                           XCB_GRAB_MODE_ASYNC);
+                
+                tabFound = YES;
+                break;
+            }
+        }
+        
+        if (!tabFound) {
+            NSLog(@"[Alt-Tab] Warning: Tab key not found in keyboard mapping, using keycode 23 as fallback");
+            // Fallback to common Tab keycode
+            xcb_grab_key(conn, 0, root, XCB_MOD_MASK_1, 23, XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC);
+            xcb_grab_key(conn, 0, root, XCB_MOD_MASK_1 | XCB_MOD_MASK_SHIFT, 23, XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC);
+        }
+        
+        free(reply);
+        [connection flush];
+        NSLog(@"[Alt-Tab] Successfully grabbed Alt+Tab and Shift+Alt+Tab");
+        
+    } @catch (NSException *exception) {
+        NSLog(@"[Alt-Tab] Exception in setupKeyboardGrabbing: %@", exception.reason);
+    }
+}
+
+- (void)handleKeyPressEvent:(xcb_key_press_event_t*)event {
+    @try {
+        // Check for modifier states directly from the event
+        BOOL altPressed = (event->state & XCB_MOD_MASK_1) != 0;
+        BOOL shiftPressed = (event->state & XCB_MOD_MASK_SHIFT) != 0;
+        
+        // Standard keycodes for reference
+        // Tab is typically keycode 23
+        // Alt keys are typically 64 (Alt_L) and 108 (Alt_R)
+        // Shift keys are typically 50 (Shift_L) and 62 (Shift_R)
+        
+        NSLog(@"[Alt-Tab] Key press: keycode=%d, state=0x%x, alt=%d, shift=%d", 
+              event->detail, event->state, altPressed, shiftPressed);
+        
+        // Track Alt key state
+        if (event->detail == 64 || event->detail == 108) {  // Alt keys
+            self.altKeyPressed = YES;
+            NSLog(@"[Alt-Tab] Alt key pressed");
+        }
+        
+        // Track Shift key state
+        if (event->detail == 50 || event->detail == 62) {  // Shift keys
+            self.shiftKeyPressed = YES;
+        }
+        
+        // Handle Tab key (keycode 23) with Alt modifier
+        if (event->detail == 23 && altPressed) {  // Tab with Alt
+            NSLog(@"[Alt-Tab] Tab pressed with Alt (shift=%d)", shiftPressed);
+            
+            if (shiftPressed) {
+                // Shift+Alt+Tab: cycle backward
+                NSLog(@"[Alt-Tab] Cycling backward");
+                [self.windowSwitcher cycleBackward];
+            } else {
+                // Alt+Tab: cycle forward
+                NSLog(@"[Alt-Tab] Cycling forward");
+                [self.windowSwitcher cycleForward];
+            }
+        }
+        
+    } @catch (NSException *exception) {
+        NSLog(@"[Alt-Tab] Exception in handleKeyPressEvent: %@", exception.reason);
+    }
+}
+
+- (void)handleKeyReleaseEvent:(xcb_key_release_event_t*)event {
+    @try {
+        NSLog(@"[Alt-Tab] Key release: keycode=%d", event->detail);
+        
+        // Check if Alt key was released
+        if (event->detail == 64 || event->detail == 108) {  // Alt keys
+            self.altKeyPressed = NO;
+            NSLog(@"[Alt-Tab] Alt key released");
+            
+            // Complete the window switch when Alt is released
+            if (self.windowSwitcher.isSwitching) {
+                NSLog(@"[Alt-Tab] Completing window switch");
+                [self.windowSwitcher completeSwitching];
+            }
+        }
+        
+        // Track Shift key release
+        if (event->detail == 50 || event->detail == 62) {  // Shift keys
+            self.shiftKeyPressed = NO;
+        }
+        
+    } @catch (NSException *exception) {
+        NSLog(@"[Alt-Tab] Exception in handleKeyReleaseEvent: %@", exception.reason);
     }
 }
 

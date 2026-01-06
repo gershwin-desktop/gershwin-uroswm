@@ -15,6 +15,7 @@
 #import <XCBKit/XCBWindow.h>
 #import <XCBKit/XCBTitleBar.h>
 #import "URSThemeIntegration.h"
+#import "URSWindowSwitcher.h"
 
 // Use GNUstep's existing RunLoopEventType and RunLoopEvents protocol
 // (already defined in Foundation/NSRunLoop.h)
@@ -30,6 +31,11 @@
 @property (assign, nonatomic) BOOL nsRunLoopActive;
 @property (assign, nonatomic) NSUInteger eventCount;
 
+// Window Switcher (Alt-Tab)
+@property (strong, nonatomic) URSWindowSwitcher* windowSwitcher;
+@property (assign, nonatomic) BOOL altKeyPressed;
+@property (assign, nonatomic) BOOL shiftKeyPressed;
+
 // Original URSEventHandler methods (preserved for compatibility)
 - (void)registerAsWindowManager;
 
@@ -42,5 +48,9 @@
 - (void)handleWindowFocusChanged:(XCBTitleBar*)titlebar isActive:(BOOL)active;
 - (void)refreshAllManagedWindows;
 
+// Keyboard event handling for Alt-Tab
+- (void)setupKeyboardGrabbing;
+- (void)handleKeyPressEvent:(xcb_key_press_event_t*)event;
+- (void)handleKeyReleaseEvent:(xcb_key_release_event_t*)event;
 
 @end

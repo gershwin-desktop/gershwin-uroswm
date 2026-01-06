@@ -18,12 +18,14 @@ $(APP_NAME)_LD_FLAGS += -L./XCBKit/XCBKit.framework/
 $(APP_NAME)_OBJC_FILES = \
 		main.m \
 		URSHybridEventHandler.m \
+		URSWindowSwitcher.m \
 		UROSWMApplication.m \
 		URSThemeIntegration.m \
 		GSThemeTitleBar.m
 
 $(APP_NAME)_HEADER_FILES = \
 		URSHybridEventHandler.h \
+		URSWindowSwitcher.h \
 		UROSWMApplication.h \
 		URSThemeIntegration.h \
 		GSThemeTitleBar.h
