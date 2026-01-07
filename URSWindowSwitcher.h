@@ -5,20 +5,31 @@
 //  Created for implementing Alt-Tab and Shift-Alt-Tab functionality
 //
 //  Manages window cycling and focus switching for keyboard navigation
+//  Includes support for minimized windows and visual overlay
 //
 
 #import <Foundation/Foundation.h>
 #import <XCBKit/XCBConnection.h>
 #import <XCBKit/XCBWindow.h>
 #import <XCBKit/XCBFrame.h>
+#import "URSWindowSwitcherOverlay.h"
+
+// Window entry to track original minimized state
+@interface URSWindowEntry : NSObject
+@property (strong, nonatomic) XCBFrame *frame;
+@property (assign, nonatomic) BOOL wasMinimized;        // Was minimized when Alt-Tab started
+@property (assign, nonatomic) BOOL temporarilyShown;    // Currently shown during cycling
+@property (strong, nonatomic) NSString *title;
+@property (strong, nonatomic) NSImage *icon;
+@end
 
 @interface URSWindowSwitcher : NSObject
 
 @property (strong, nonatomic) XCBConnection *connection;
-@property (strong, nonatomic) NSMutableArray *windowStack;  // Ordered list of windows (most recent first)
-@property (assign, nonatomic) NSInteger currentIndex;        // Current position in window stack during switching
-@property (assign, nonatomic) BOOL isSwitching;             // Whether we're in the middle of switching
-@property (strong, nonatomic) XCBFrame *previousFocus;      // Window that had focus before switching started
+@property (strong, nonatomic) NSMutableArray *windowEntries;   // Array of URSWindowEntry
+@property (assign, nonatomic) NSInteger currentIndex;          // Current position during switching
+@property (assign, nonatomic) BOOL isSwitching;               // Whether we're in the middle of switching
+@property (strong, nonatomic) URSWindowSwitcherOverlay *overlay;  // Visual overlay
 
 // Singleton access
 + (instancetype)sharedSwitcherWithConnection:(XCBConnection *)connection;
@@ -27,7 +38,12 @@
 - (void)updateWindowStack;
 - (void)addWindowToStack:(XCBFrame *)frame;
 - (void)removeWindowFromStack:(XCBFrame *)frame;
-- (void)bringWindowToFront:(XCBFrame *)frame;
+
+// Window state checking and manipulation
+- (BOOL)isWindowMinimized:(XCBFrame *)frame;
+- (void)minimizeWindow:(XCBFrame *)frame;
+- (void)unminimizeWindow:(XCBFrame *)frame;
+- (NSString *)getTitleForFrame:(XCBFrame *)frame;
 
 // Switching operations
 - (void)startSwitching;
@@ -37,8 +53,7 @@
 - (void)cancelSwitching;
 
 // Helper methods
-- (NSArray *)getManagedWindows;
 - (void)focusWindow:(XCBFrame *)frame;
-- (XCBFrame *)getCurrentFocusedWindow;
+- (void)raiseWindow:(XCBFrame *)frame;
 
 @end

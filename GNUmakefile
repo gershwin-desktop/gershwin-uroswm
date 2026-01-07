@@ -19,6 +19,7 @@ $(APP_NAME)_OBJC_FILES = \
 		main.m \
 		URSHybridEventHandler.m \
 		URSWindowSwitcher.m \
+		URSWindowSwitcherOverlay.m \
 		UROSWMApplication.m \
 		URSThemeIntegration.m \
 		GSThemeTitleBar.m
@@ -26,6 +27,7 @@ $(APP_NAME)_OBJC_FILES = \
 $(APP_NAME)_HEADER_FILES = \
 		URSHybridEventHandler.h \
 		URSWindowSwitcher.h \
+		URSWindowSwitcherOverlay.h \
 		UROSWMApplication.h \
 		URSThemeIntegration.h \
 		GSThemeTitleBar.h

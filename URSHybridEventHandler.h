@@ -16,6 +16,7 @@
 #import <XCBKit/XCBTitleBar.h>
 #import "URSThemeIntegration.h"
 #import "URSWindowSwitcher.h"
+#import "URSWindowSwitcherOverlay.h"
 
 // Use GNUstep's existing RunLoopEventType and RunLoopEvents protocol
 // (already defined in Foundation/NSRunLoop.h)

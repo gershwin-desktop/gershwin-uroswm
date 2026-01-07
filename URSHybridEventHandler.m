@@ -1623,6 +1623,33 @@
         if (event->detail == 23 && altPressed) {  // Tab with Alt
             NSLog(@"[Alt-Tab] Tab pressed with Alt (shift=%d)", shiftPressed);
             
+            // If not already switching, grab the keyboard to receive all future key events
+            // including the Alt key release
+            if (!self.windowSwitcher.isSwitching) {
+                XCBScreen *screen = [[connection screens] objectAtIndex:0];
+                xcb_window_t root = [[screen rootWindow] window];
+                xcb_connection_t *conn = [connection connection];
+                
+                // Actively grab the keyboard to receive all key events
+                xcb_grab_keyboard_cookie_t cookie = xcb_grab_keyboard(conn,
+                                                                      0,  // owner_events
+                                                                      root,
+                                                                      XCB_CURRENT_TIME,
+                                                                      XCB_GRAB_MODE_ASYNC,
+                                                                      XCB_GRAB_MODE_ASYNC);
+                xcb_grab_keyboard_reply_t *reply = xcb_grab_keyboard_reply(conn, cookie, NULL);
+                
+                if (reply) {
+                    if (reply->status == XCB_GRAB_STATUS_SUCCESS) {
+                        NSLog(@"[Alt-Tab] Successfully grabbed keyboard");
+                    } else {
+                        NSLog(@"[Alt-Tab] Warning: Keyboard grab failed with status %d", reply->status);
+                    }
+                    free(reply);
+                }
+                [connection flush];
+            }
+            
             if (shiftPressed) {
                 // Shift+Alt+Tab: cycle backward
                 NSLog(@"[Alt-Tab] Cycling backward");
@@ -1650,7 +1677,14 @@
             
             // Complete the window switch when Alt is released
             if (self.windowSwitcher.isSwitching) {
-                NSLog(@"[Alt-Tab] Completing window switch");
+                NSLog(@"[Alt-Tab] Completing window switch and ungrabbing keyboard");
+                
+                // First ungrab the keyboard
+                xcb_connection_t *conn = [connection connection];
+                xcb_ungrab_keyboard(conn, XCB_CURRENT_TIME);
+                [connection flush];
+                
+                // Then complete the switching (which hides the overlay)
                 [self.windowSwitcher completeSwitching];
             }
         }
