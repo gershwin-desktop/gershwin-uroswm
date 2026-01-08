@@ -66,6 +66,29 @@ static void setupSignalHandlers(void)
 int main(int argc, const char * argv[])
 {
     @autoreleasepool {
+        
+        // Parse command-line arguments for compositing flag
+        BOOL enableCompositing = NO;
+        for (int i = 1; i < argc; i++) {
+            if (strcmp(argv[i], "-c") == 0 || strcmp(argv[i], "--compositing") == 0) {
+                enableCompositing = YES;
+                NSLog(@"[WindowManager] Compositing mode enabled via command-line flag");
+                break;
+            } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+                printf("WindowManager - Objective-C Window Manager\n");
+                printf("Usage: %s [options]\n\n", argv[0]);
+                printf("Options:\n");
+                printf("  -c, --compositing    Enable XRender compositing (experimental)\n");
+                printf("  -h, --help          Show this help message\n\n");
+                printf("Without compositing, windows render directly (traditional mode).\n");
+                printf("With compositing, windows use XRender for transparency effects.\n");
+                return 0;
+            }
+        }
+        
+        // Store compositing preference in user defaults for access by event handler
+        [[NSUserDefaults standardUserDefaults] setBool:enableCompositing 
+                                                 forKey:@"URSCompositingEnabled"];
 
         // Initialize TitleBar settings (same as before)
         TitleBarSettingsService *settings = [TitleBarSettingsService sharedInstance];

@@ -16,6 +16,7 @@
 #import <xcb/xcb.h>
 #import <xcb/xcb_icccm.h>
 #import <xcb/xcb_aux.h>
+#import <xcb/damage.h>
 #import <X11/keysym.h>
 #import <XCBKit/services/EWMHService.h>
 #import <XCBKit/services/XCBAtomService.h>
@@ -34,6 +35,8 @@
 @synthesize windowSwitcher;
 @synthesize altKeyPressed;
 @synthesize shiftKeyPressed;
+@synthesize compositingManager;
+@synthesize compositingRequested;
 
 #pragma mark - Initialization
 
@@ -58,6 +61,16 @@
     self.windowSwitcher = [URSWindowSwitcher sharedSwitcherWithConnection:connection];
     self.altKeyPressed = NO;
     self.shiftKeyPressed = NO;
+    
+    // Check if compositing was requested via command-line
+    self.compositingRequested = [[NSUserDefaults standardUserDefaults] 
+                                  boolForKey:@"URSCompositingEnabled"];
+    
+    if (self.compositingRequested) {
+        NSLog(@"[WindowManager] Compositing requested - will attempt to initialize");
+    } else {
+        NSLog(@"[WindowManager] Compositing disabled - using direct rendering");
+    }
 
     return self;
 }
@@ -79,6 +92,11 @@
         NSLog(@"[WindowManager] Failed to register as WM; terminating");
         [NSApp terminate:nil];
         return;
+    }
+    
+    // Initialize compositing if requested
+    if (self.compositingRequested) {
+        [self initializeCompositing];
     }
 
     // Decorate any existing windows already on screen
@@ -110,6 +128,54 @@
 {
     // Keep running even if no windows are visible (window manager behavior)
     return NO;
+}
+
+#pragma mark - Compositing Management
+
+- (void)initializeCompositing {
+    NSLog(@"[WindowManager] ================================================");
+    NSLog(@"[WindowManager] Initializing XRender compositing (experimental)");
+    NSLog(@"[WindowManager] ================================================");
+    
+    @try {
+        // Create compositing manager singleton
+        self.compositingManager = [URSCompositingManager sharedManager];
+        
+        // Initialize with our XCB connection
+        BOOL initialized = [self.compositingManager initializeWithConnection:self.connection];
+        
+        if (!initialized) {
+            NSLog(@"[WindowManager] ⚠️  Compositing initialization failed");
+            NSLog(@"[WindowManager] ⚠️  Falling back to direct rendering (traditional mode)");
+            NSLog(@"[WindowManager] ⚠️  Windows will render normally without compositing");
+            self.compositingManager = nil;
+            return;
+        }
+        
+        // Attempt to activate compositing
+        BOOL activated = [self.compositingManager activateCompositing];
+        
+        if (!activated) {
+            NSLog(@"[WindowManager] ⚠️  Compositing activation failed");
+            NSLog(@"[WindowManager] ⚠️  Falling back to direct rendering (traditional mode)");
+            NSLog(@"[WindowManager] ⚠️  Windows will render normally without compositing");
+            [self.compositingManager cleanup];
+            self.compositingManager = nil;
+            return;
+        }
+        
+        NSLog(@"[WindowManager] ✓ Compositing successfully activated!");
+        NSLog(@"[WindowManager] ✓ Windows will use XRender for transparency effects");
+        NSLog(@"[WindowManager] ================================================");
+        
+    } @catch (NSException *exception) {
+        NSLog(@"[WindowManager] ❌ EXCEPTION initializing compositing: %@", exception.reason);
+        NSLog(@"[WindowManager] ❌ Falling back to non-compositing mode");
+        if (self.compositingManager) {
+            [self.compositingManager cleanup];
+            self.compositingManager = nil;
+        }
+    }
 }
 
 #pragma mark - Original URSEventHandler Methods (Preserved)
@@ -352,6 +418,11 @@
 
             // Re-apply GSTheme if this is a titlebar expose event
             [self handleTitlebarExpose:exposeEvent];
+            
+            // Trigger compositor update if active
+            if (self.compositingManager && [self.compositingManager compositingActive]) {
+                [self.compositingManager scheduleComposite];
+            }
             break;
         }
         case XCB_ENTER_NOTIFY: {
@@ -402,6 +473,11 @@
         case XCB_MAP_NOTIFY: {
             xcb_map_notify_event_t *notifyEvent = (xcb_map_notify_event_t *)event;
             [connection handleMapNotify:notifyEvent];
+            
+            // Notify compositor of map event
+            if (self.compositingManager && [self.compositingManager compositingActive]) {
+                [self.compositingManager mapWindow:notifyEvent->window];
+            }
             break;
         }
         case XCB_MAP_REQUEST: {
@@ -413,6 +489,11 @@
             // Let XCBConnection handle the map request normally (this creates titlebar structure)
             [connection handleMapRequest:mapRequestEvent];
 
+            // Register window with compositor if active
+            if (self.compositingManager && [self.compositingManager compositingActive]) {
+                [self.compositingManager registerWindow:mapRequestEvent->window];
+            }
+
             // Hide borders for windows with fixed sizes (like info panels and logout)
             [self adjustBorderForFixedSizeWindow:mapRequestEvent->window];
 
@@ -423,10 +504,21 @@
         case XCB_UNMAP_NOTIFY: {
             xcb_unmap_notify_event_t *unmapNotifyEvent = (xcb_unmap_notify_event_t *)event;
             [connection handleUnMapNotify:unmapNotifyEvent];
+            
+            // Notify compositor of unmap event
+            if (self.compositingManager && [self.compositingManager compositingActive]) {
+                [self.compositingManager unmapWindow:unmapNotifyEvent->window];
+            }
             break;
         }
         case XCB_DESTROY_NOTIFY: {
             xcb_destroy_notify_event_t *destroyNotify = (xcb_destroy_notify_event_t *)event;
+            
+            // Unregister window from compositor before connection handles destroy
+            if (self.compositingManager && [self.compositingManager compositingActive]) {
+                [self.compositingManager unregisterWindow:destroyNotify->window];
+            }
+            
             [connection handleDestroyNotify:destroyNotify];
             break;
         }
@@ -443,6 +535,15 @@
         case XCB_CONFIGURE_NOTIFY: {
             xcb_configure_notify_event_t *configureNotify = (xcb_configure_notify_event_t *)event;
             [connection handleConfigureNotify:configureNotify];
+            
+            // Notify compositor of window resize/move
+            if (self.compositingManager && [self.compositingManager compositingActive]) {
+                [self.compositingManager resizeWindow:configureNotify->window 
+                                                    x:configureNotify->x
+                                                    y:configureNotify->y
+                                                width:configureNotify->width
+                                               height:configureNotify->height];
+            }
             break;
         }
         case XCB_PROPERTY_NOTIFY: {
@@ -465,8 +566,16 @@
             [self handleSelectionClear:selectionClearEvent];
             break;
         }
-        default:
+        default: {
+            // Check for extension events (damage, etc.)
+            // Log all unhandled events to see what we're missing
+            uint8_t responseType = event->response_type & ~0x80;
+            if (responseType > 64) { // Extension events are typically > 64
+                NSLog(@"[Event] Unhandled extension event: response_type=%u", responseType);
+            }
+            [self handleExtensionEvent:event];
             break;
+        }
     }
 }
 
@@ -485,6 +594,29 @@
             return YES;
         default:
             return NO;
+    }
+}
+
+- (void)handleExtensionEvent:(xcb_generic_event_t*)event
+{
+    // Handle extension events (DAMAGE, etc.)
+    if (!self.compositingManager) {
+        return;
+    }
+    
+    uint8_t responseType = event->response_type & ~0x80;
+    uint8_t damageEventBase = [self.compositingManager damageEventBase];
+    
+    // DAMAGE notify events are at base_event + XCB_DAMAGE_NOTIFY (0)
+    // Check if this is a DAMAGE event
+    if (responseType == damageEventBase + XCB_DAMAGE_NOTIFY) {
+        // This is a DAMAGE notify event
+        xcb_damage_notify_event_t *damageEvent = (xcb_damage_notify_event_t *)event;
+        
+        NSLog(@"[DamageEvent] Window %u damaged, recompositing...", damageEvent->drawable);
+        
+        // The drawable field contains the window that was damaged
+        [self.compositingManager handleDamageNotify:damageEvent->drawable];
     }
 }
 
@@ -1706,6 +1838,14 @@
     NSLog(@"[WindowManager] ========== Starting comprehensive cleanup ==========");
     
     @try {
+        // Step 0: Clean up compositing if active
+        if (self.compositingManager && [self.compositingManager compositingActive]) {
+            NSLog(@"[WindowManager] Step 0: Deactivating compositing");
+            [self.compositingManager deactivateCompositing];
+            [self.compositingManager cleanup];
+            self.compositingManager = nil;
+        }
+        
         // Step 1: Clean up keyboard grabs
         NSLog(@"[WindowManager] Step 1: Cleaning up keyboard grabs");
         [self cleanupKeyboardGrabbing];

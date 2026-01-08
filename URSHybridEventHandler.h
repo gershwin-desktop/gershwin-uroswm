@@ -17,6 +17,7 @@
 #import "URSThemeIntegration.h"
 #import "URSWindowSwitcher.h"
 #import "URSWindowSwitcherOverlay.h"
+#import "URSCompositingManager.h"
 
 // Use GNUstep's existing RunLoopEventType and RunLoopEvents protocol
 // (already defined in Foundation/NSRunLoop.h)
@@ -36,6 +37,10 @@
 @property (strong, nonatomic) URSWindowSwitcher* windowSwitcher;
 @property (assign, nonatomic) BOOL altKeyPressed;
 @property (assign, nonatomic) BOOL shiftKeyPressed;
+
+// Compositing Manager
+@property (strong, nonatomic) URSCompositingManager* compositingManager;
+@property (assign, nonatomic) BOOL compositingRequested;
 
 // Original URSEventHandler methods (preserved for compatibility)
 - (BOOL)registerAsWindowManager;

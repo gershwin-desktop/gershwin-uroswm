@@ -41,6 +41,22 @@ uroswm
 uroswm &
 ```
 
+### Command-Line Options
+
+```
+uroswm [options]
+
+Options:
+  -c, --compositing    Enable XRender compositing (experimental)
+  -h, --help          Show help message
+```
+
+**Compositing Mode:**
+- **Without `-c`:** Windows render directly (traditional, stable mode)
+- **With `-c`:** Windows use XRender for transparency effects (experimental)
+- Automatically falls back to non-compositing on any errors
+- Requires COMPOSITE, RENDER, DAMAGE, and XFIXES X extensions
+
 **Note:** The display number `:1` is what you set for Xephyr. It cannot run on the same display where X11 is already running.
 
 Distributions may set the `DISPLAY` environment variable differently based on their needs. For example:
