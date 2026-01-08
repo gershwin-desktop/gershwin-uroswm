@@ -35,17 +35,26 @@
 // Window state changes
 - (void)mapWindow:(xcb_window_t)window;
 - (void)unmapWindow:(xcb_window_t)window;
+- (void)moveWindow:(xcb_window_t)windowId x:(int16_t)x y:(int16_t)y;
 - (void)resizeWindow:(xcb_window_t)windowId x:(int16_t)x y:(int16_t)y 
                width:(uint16_t)width height:(uint16_t)height;
+// Move window without resize (for drag operations) - more efficient than resizeWindow
+- (void)moveWindow:(xcb_window_t)windowId x:(int16_t)x y:(int16_t)y;
 
 // OPTIMIZATION: Notify compositor that stacking order changed (window raised/lowered)
 - (void)markStackingOrderDirty;
+
+// Force immediate repair without deferring to next runloop (use during interactive drag)
+- (void)performRepairNow;
 
 // Render the composite screen
 - (void)compositeScreen;
 
 // Schedule a throttled composite (preferred for event-driven updates)
 - (void)scheduleComposite;
+
+// Perform repair immediately without deferring (for critical updates like cursor blinking)
+- (void)performRepairNow;
 
 // Handle damage events
 - (void)handleDamageNotify:(xcb_window_t)window;

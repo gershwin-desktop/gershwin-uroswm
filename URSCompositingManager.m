@@ -16,6 +16,9 @@
 #import <xcb/xfixes.h>
 #import <xcb/render.h>
 #import <xcb/damage.h>
+#import <xcb/shm.h>
+#import <sys/shm.h>
+#import <sys/ipc.h>
 #import <math.h>
 
 // Shadow configuration
@@ -35,6 +38,9 @@
 @property (assign, nonatomic) BOOL damaged;
 @property (assign, nonatomic) BOOL viewable;
 @property (assign, nonatomic) BOOL redirected;
+// OPTIMIZATION: Lazy picture creation - defer until first paint
+@property (assign, nonatomic) BOOL pictureValid;
+@property (assign, nonatomic) BOOL needsPictureCreation;
 // Cached geometry
 @property (assign, nonatomic) int16_t x;
 @property (assign, nonatomic) int16_t y;
@@ -65,6 +71,9 @@
         _damaged = NO;
         _viewable = NO;
         _redirected = YES;
+        // OPTIMIZATION: Lazy picture creation
+        _pictureValid = NO;
+        _needsPictureCreation = YES;
         _shadowPicture = XCB_NONE;
         _shadowPixmap = XCB_NONE;
         _shadowOffsetX = 0;
@@ -126,6 +135,13 @@
 @property (strong, nonatomic) NSMutableArray<NSNumber *> *windowStackingOrder;
 @property (assign, nonatomic) BOOL stackingOrderDirty;
 
+// OPTIMIZATION: MIT-SHM shared memory support for zero-copy transfers
+@property (assign, nonatomic) BOOL shmAvailable;
+@property (assign, nonatomic) xcb_shm_seg_t shmSeg;
+@property (assign, nonatomic) int shmId;
+@property (assign, nonatomic) void *shmAddr;
+@property (assign, nonatomic) size_t shmSize;
+
 @end
 
 @implementation URSCompositingManager
@@ -164,6 +180,13 @@
         // OPTIMIZATION: Initialize stacking order cache
         _windowStackingOrder = [[NSMutableArray alloc] init];
         _stackingOrderDirty = YES;
+        
+        // OPTIMIZATION: Initialize MIT-SHM (will be checked during extension query)
+        _shmAvailable = NO;
+        _shmSeg = XCB_NONE;
+        _shmId = -1;
+        _shmAddr = NULL;
+        _shmSize = 0;
         
         // Initialize Gaussian shadow data
         _gaussianMap = make_gaussian_map((double)SHADOW_RADIUS, &_gaussianSize);
@@ -310,6 +333,25 @@
                       xfixes_reply->major_version, xfixes_reply->minor_version);
                 free(xfixes_reply);
             }
+        }
+        
+        // OPTIMIZATION: Check MIT-SHM extension (optional, for zero-copy transfers)
+        const xcb_query_extension_reply_t *shm_ext = 
+            xcb_get_extension_data(conn, &xcb_shm_id);
+        
+        if (shm_ext && shm_ext->present) {
+            xcb_shm_query_version_cookie_t shm_cookie = xcb_shm_query_version(conn);
+            xcb_shm_query_version_reply_t *shm_reply = 
+                xcb_shm_query_version_reply(conn, shm_cookie, NULL);
+            if (shm_reply) {
+                self.shmAvailable = YES;
+                NSLog(@"[CompositingManager] MIT-SHM v%d.%d available (shared pixmaps: %s)", 
+                      shm_reply->major_version, shm_reply->minor_version,
+                      shm_reply->shared_pixmaps ? "yes" : "no");
+                free(shm_reply);
+            }
+        } else {
+            NSLog(@"[CompositingManager] MIT-SHM not available (using standard transfers)");
         }
         
         return allExtensionsOK;
@@ -845,6 +887,9 @@
     }
     
     cw.damaged = NO;
+    // OPTIMIZATION: Reset lazy picture flags
+    cw.pictureValid = NO;
+    cw.needsPictureCreation = YES;
 }
 
 - (void)updateWindow:(xcb_window_t)window {
@@ -869,6 +914,46 @@
     
     // Damage the window's area
     [self damageWindowArea:cw];
+}
+
+- (void)moveWindow:(xcb_window_t)windowId x:(int16_t)x y:(int16_t)y {
+    if (!self.compositingActive) {
+        return;
+    }
+    
+    URSCompositeWindow *cw = [self findCWindow:windowId];
+    if (!cw) {
+        return;
+    }
+    
+    xcb_connection_t *conn = [self.connection connection];
+    
+    // If visible, damage the old area
+    if (cw.viewable) {
+        [self damageWindowArea:cw];
+    }
+    
+    // Update position
+    cw.x = x;
+    cw.y = y;
+    
+    // Invalidate regions since position changed
+    if (cw.borderSize != XCB_NONE) {
+        xcb_xfixes_destroy_region(conn, cw.borderSize);
+        cw.borderSize = XCB_NONE;
+    }
+    if (cw.extents != XCB_NONE) {
+        xcb_xfixes_destroy_region(conn, cw.extents);
+        cw.extents = XCB_NONE;
+    }
+    
+    // Damage the new area
+    if (cw.viewable) {
+        [self damageWindowArea:cw];
+    }
+    
+    // Mark stacking order dirty (window moved)
+    self.stackingOrderDirty = YES;
 }
 
 - (void)resizeWindow:(xcb_window_t)windowId x:(int16_t)x y:(int16_t)y 
@@ -908,7 +993,9 @@
             xcb_free_pixmap(conn, cw.shadowPixmap);
             cw.shadowPixmap = XCB_NONE;
         }
-        // Will be recreated on next paint
+        // OPTIMIZATION: Reset lazy picture flags so picture is recreated
+        cw.pictureValid = NO;
+        cw.needsPictureCreation = YES;
     }
     
     // If position or size changed, invalidate regions
@@ -945,6 +1032,9 @@
     if (cw) {
         cw.viewable = YES;
         cw.damaged = NO;
+        // OPTIMIZATION: Force picture recreation on remap (window may have new content)
+        cw.pictureValid = NO;
+        cw.needsPictureCreation = YES;
         // Create shadow for newly mapped window
         if (cw.shadowPicture == XCB_NONE && self.argbFormat != XCB_NONE) {
             [self createShadowForWindow:cw];
@@ -1144,18 +1234,18 @@
 #pragma mark - Compositing
 
 - (void)scheduleRepair {
-    // Cancel any previously scheduled repair
+    // If repair is already scheduled, don't reschedule (damage accumulates)
     if (self.repairScheduled) {
-        [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(performRepair) object:nil];
+        return;
     }
     
-    // Always schedule repair when damage exists
-    // Damage accumulates in self.allDamage, so we won't lose events
+    // Mark repair as scheduled
     self.repairScheduled = YES;
     
-    // Use 1ms delay to batch rapid damage events
-    // This is critical for things like blinking cursors that generate frequent damage
-    [self performSelector:@selector(performRepair) withObject:nil afterDelay:0.001];
+    // Schedule repair on next run loop iteration (immediate)
+    // This ensures damage is painted as soon as possible while still
+    // allowing multiple damage events to accumulate
+    [self performSelector:@selector(performRepair) withObject:nil afterDelay:0.0];
 }
 
 - (void)performRepair {
@@ -1173,6 +1263,32 @@
     xcb_xfixes_region_t damage = self.allDamage;
     self.allDamage = XCB_NONE;
     self.repairScheduled = NO;
+    
+    [self paintAll:damage];
+    
+    xcb_xfixes_destroy_region([self.connection connection], damage);
+}
+
+- (void)performRepairNow {
+    if (!self.compositingActive) {
+        return;
+    }
+    
+    // Cancel any scheduled repair
+    if (self.repairScheduled) {
+        [NSObject cancelPreviousPerformRequestsWithTarget:self 
+                                                 selector:@selector(performRepair) 
+                                                   object:nil];
+        self.repairScheduled = NO;
+    }
+    
+    // Check if there's damage to paint
+    if (self.allDamage == XCB_NONE) {
+        return;
+    }
+    
+    xcb_xfixes_region_t damage = self.allDamage;
+    self.allDamage = XCB_NONE;
     
     [self paintAll:damage];
     
@@ -1598,9 +1714,19 @@ static uint8_t sum_gaussian(double *map, int map_size, double opacity,
     // Use clip region for window painting (performance optimization)
     xcb_xfixes_set_picture_clip_region(conn, self.rootBuffer, clipRegion, 0, 0);
     
-    // Ensure we have a picture for this window
-    if (cw.picture == XCB_NONE) {
+    // OPTIMIZATION: Lazy picture creation - only create when first painting
+    // NOTE: The underlying NameWindowPixmap is automatically updated by X server on damage
+    // so we only need to recreate when pictureValid is false (size change, etc.)
+    if (!cw.pictureValid || cw.needsPictureCreation) {
+        if (cw.picture != XCB_NONE) {
+            xcb_render_free_picture(conn, cw.picture);
+            cw.picture = XCB_NONE;
+        }
         cw.picture = [self getWindowPicture:cw];
+        if (cw.picture != XCB_NONE) {
+            cw.pictureValid = YES;
+            cw.needsPictureCreation = NO;
+        }
     }
     
     if (cw.picture != XCB_NONE) {

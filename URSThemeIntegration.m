@@ -6,6 +6,7 @@
 //
 
 #import "URSThemeIntegration.h"
+#import "URSRenderingContext.h"
 #import <XCBKit/XCBConnection.h>
 #import <XCBKit/XCBFrame.h>
 #import <cairo/cairo.h>
@@ -621,6 +622,13 @@ static NSMutableSet *fixedSizeWindows = nil;
     }
 
     [titlebar.connection flush];
+
+    // Notify compositor that titlebar rendering is complete
+    // Use the parent frame's window ID for compositor notification
+    xcb_window_t windowId = [[titlebar parentWindow] window];
+    if (windowId != 0) {
+        [URSRenderingContext notifyRenderingComplete:windowId];
+    }
 
     return YES;
 }

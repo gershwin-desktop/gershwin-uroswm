@@ -369,6 +369,8 @@
                 [connection handleMotionNotify:lastMotionEvent];
                 // STEP 3: Render new content and set as background
                 [self handleResizeDuringMotion:lastMotionEvent];
+                // STEP 4: Update compositor for drag or resize (immediate update for responsiveness)
+                [self handleCompositingDuringMotion:lastMotionEvent];
                 needFlush = YES;
                 free(lastMotionEvent);
                 lastMotionEvent = NULL;
@@ -397,6 +399,12 @@
         [connection flush];
         [connection setNeedFlush:NO];
     }
+    
+    // CRITICAL: If compositor has pending damage, flush it immediately
+    // This ensures cursor blinking and rapid updates are displayed without delay
+    if (self.compositingManager && [self.compositingManager compositingActive]) {
+        [self.compositingManager performRepairNow];
+    }
 
     // Update event statistics
     self.eventCount += eventsProcessed;
@@ -423,6 +431,11 @@
             if (self.compositingManager && [self.compositingManager compositingActive]) {
                 // Update the specific window that was exposed for efficient redraw
                 [self.compositingManager updateWindow:exposeEvent->window];
+                // Force immediate repair for expose events (e.g., cursor blinking)
+                // Only on the final expose event in a sequence (count == 0)
+                if (exposeEvent->count == 0) {
+                    [self.compositingManager performRepairNow];
+                }
             }
             break;
         }
@@ -442,6 +455,11 @@
             [connection handleFocusIn:focusInEvent];
             // Re-render titlebar with GSTheme as active
             [self handleFocusChange:focusInEvent->event isActive:YES];
+            
+            // Focus change typically means stacking order changed (window raised)
+            if (self.compositingManager && [self.compositingManager compositingActive]) {
+                [self.compositingManager markStackingOrderDirty];
+            }
             break;
         }
         case XCB_FOCUS_OUT: {
@@ -460,6 +478,11 @@
             if (![self handleTitlebarButtonPress:pressEvent]) {
                 // Not a titlebar button, let xcbkit handle normally
                 [connection handleButtonPress:pressEvent];
+            }
+            
+            // Button press typically raises the window (changes stacking order)
+            if (self.compositingManager && [self.compositingManager compositingActive]) {
+                [self.compositingManager markStackingOrderDirty];
             }
             break;
         }
@@ -720,6 +743,8 @@
         // Notify compositor about the titlebar content change
         if (self.compositingManager && [self.compositingManager compositingActive]) {
             [self.compositingManager updateWindow:[frame window]];
+            // Mark stacking order dirty since focused windows are typically raised
+            [self.compositingManager markStackingOrderDirty];
         }
 
     } @catch (NSException *exception) {
@@ -1282,6 +1307,62 @@
         }
     } @catch (NSException *exception) {
         // Silently ignore exceptions during resize motion to avoid spam
+    }
+}
+
+// Handle compositor updates during window drag or resize
+- (void)handleCompositingDuringMotion:(xcb_motion_notify_event_t*)motionEvent {
+    if (!self.compositingManager || ![self.compositingManager compositingActive]) {
+        return;
+    }
+    
+    @try {
+        // Check if this is a drag operation (window being moved)
+        if ([connection dragState]) {
+            // Find the titlebar being dragged
+            XCBWindow *window = [connection windowForXCBId:motionEvent->event];
+            if (!window || ![window isKindOfClass:[XCBTitleBar class]]) {
+                return;
+            }
+            
+            XCBFrame *frame = (XCBFrame*)[window parentWindow];
+            if (!frame || ![frame isKindOfClass:[XCBFrame class]]) {
+                return;
+            }
+            
+            // Get the frame's current position (after moveTo: was called)
+            XCBRect frameRect = [frame windowRect];
+            
+            // Notify compositor of window move (efficient - doesn't recreate picture)
+            [self.compositingManager moveWindow:[frame window] 
+                                              x:frameRect.position.x 
+                                              y:frameRect.position.y];
+            
+            // Perform immediate repair during drag for responsive visual feedback
+            [self.compositingManager performRepairNow];
+        } else if ([connection resizeState]) {
+            // Resize case - already handled by handleResizeDuringMotion, but ensure compositor updates
+            XCBWindow *window = [connection windowForXCBId:motionEvent->event];
+            XCBFrame *frame = nil;
+            
+            if ([window isKindOfClass:[XCBFrame class]]) {
+                frame = (XCBFrame*)window;
+            }
+            
+            if (frame) {
+                XCBRect frameRect = [frame windowRect];
+                [self.compositingManager resizeWindow:[frame window]
+                                                    x:frameRect.position.x
+                                                    y:frameRect.position.y
+                                                width:frameRect.size.width
+                                               height:frameRect.size.height];
+                
+                // Perform immediate repair during resize for responsive visual feedback
+                [self.compositingManager performRepairNow];
+            }
+        }
+    } @catch (NSException *exception) {
+        // Silently ignore exceptions during motion to avoid spam
     }
 }
 

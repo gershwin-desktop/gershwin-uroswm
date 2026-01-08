@@ -21,6 +21,7 @@ $(APP_NAME)_OBJC_FILES = \
 		URSWindowSwitcher.m \
 		URSWindowSwitcherOverlay.m \
 		URSCompositingManager.m \
+		URSRenderingContext.m \
 		UROSWMApplication.m \
 		URSThemeIntegration.m \
 		GSThemeTitleBar.m
@@ -30,11 +31,12 @@ $(APP_NAME)_HEADER_FILES = \
 		URSWindowSwitcher.h \
 		URSWindowSwitcherOverlay.h \
 		URSCompositingManager.h \
+		URSRenderingContext.h \
 		UROSWMApplication.h \
 		URSThemeIntegration.h \
 		GSThemeTitleBar.h
 
-$(APP_NAME)_GUI_LIBS = -lXCBKit -lxcb -lxcb-icccm -lxcb-util $(shell pkg-config --libs cairo xcb) -lX11 -lXcomposite -lXext -lxcb-composite -lxcb-render -lxcb-damage -lxcb-xfixes
+$(APP_NAME)_GUI_LIBS = -lXCBKit -lxcb -lxcb-icccm -lxcb-util $(shell pkg-config --libs cairo xcb) -lX11 -lXcomposite -lXext -lxcb-composite -lxcb-render -lxcb-damage -lxcb-xfixes -lxcb-shm
 
 ADDITIONAL_OBJCFLAGS = -std=c99 -g -O0 -fobjc-arc -Wall -Wno-typedef-redefinition #-Wno-unused -Werror -Wall
 
